@@ -1,0 +1,13 @@
+# Line endings are part of what these files mean.
+#
+# Git for Windows checks text files out with CRLF by default. One data file in
+# this repo is parsed line by line, and a stray carriage return on the last word
+# of each line silently broke every homophone group on a Windows checkout — the
+# only platform this app is for. Source stays LF everywhere; Windows-only
+# scripts would be the one place to opt in to CRLF, and there are none.
+* text=auto eol=lf
+src/data/homophones.txt text eol=lf
+*.gz binary
+*.png binary
+*.ico binary
+*.wav binary

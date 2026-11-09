@@ -72,18 +72,32 @@ export function homophoneTableRaw(): string {
 /// which is correct — they are not homophones.
 export function homophoneGroupOf(): Map<string, Set<string>> {
   if (groups) return groups;
-  groups = new Map();
-  for (const line of homophoneTableRaw().split('\n')) {
-    const group = line.split(' ').filter((word) => word.length > 0);
+  groups = parseHomophoneGroups(homophoneTableRaw());
+  return groups;
+}
+
+/// The parser, apart from the file read, so a test can hand it a CRLF string.
+///
+/// `/\r?\n/` and split on any whitespace, not `'\n'` and `' '`. Git for Windows
+/// checks text files out with CRLF by default, which left a stray `\r` on the
+/// last word of every line: "flower flour\r" put `flour\r` in the table, so the
+/// second word of every group could never match a real word. It passed on macOS
+/// and Linux and failed only on a Windows runner, which is the only place anyone
+/// had looked at it. `.gitattributes` also pins this file to LF; this makes the
+/// parser right whatever the checkout did.
+export function parseHomophoneGroups(raw: string): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const line of raw.split(/\r?\n/)) {
+    const group = line.split(/\s+/).filter((word) => word.length > 0);
     if (group.length === 0) continue;
     for (const word of group) {
-      let existing = groups.get(word);
+      let existing = result.get(word);
       if (!existing) {
         existing = new Set();
-        groups.set(word, existing);
+        result.set(word, existing);
       }
       for (const other of group) existing.add(other);
     }
   }
-  return groups;
+  return result;
 }

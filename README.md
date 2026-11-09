@@ -6,7 +6,7 @@ This is **Quill for macOS v1.3.2 translated to Windows**. Same app, same behavio
 
 - **Speech model: Whisper large-v3-turbo**, running on your GPU through WebGPU (it falls back to Whisper Base on the CPU if the machine has no usable GPU — see [the speech model](#the-speech-model)).
 - **AI cleanup model: `meta/llama-3.1-8b-instruct` on NVIDIA NIM** — the same model, endpoint, temperature and token limit as the Mac app. Optional; off until you add a free key.
-- **546 automated tests**, no Electron needed to run them. CI builds the Windows installer on a real Windows runner on every push.
+- **547 automated tests**, no Electron needed to run them. CI builds the Windows installer on a real Windows runner on every push.
 
 Upstream (macOS): <https://github.com/romangigliotti123-arch/quill> · License: MIT
 
@@ -38,7 +38,7 @@ npm run typecheck
 npm test
 ```
 
-**Expected:** `npm ci` finishes without errors (warnings about install scripts are normal). `npm run typecheck` prints nothing after the command echo. `npm test` ends with `ℹ tests 546`, `ℹ pass 546`, `ℹ fail 0`.
+**Expected:** `npm ci` finishes without errors (warnings about install scripts are normal). `npm run typecheck` prints nothing after the command echo. `npm test` ends with `ℹ tests 547`, `ℹ pass 547`, `ℹ fail 0`.
 
 If `npm test` shows a failure, stop and report the failing test name — do not continue to the build.
 
@@ -244,7 +244,7 @@ A file that exists but cannot be read is **never overwritten**: the store keeps 
 npm ci                 # install exactly what package-lock.json says
 npm start              # build + launch
 npm run dev            # same, with the dashboard open
-npm test               # 546 tests, ~1 s, no Electron
+npm test               # 547 tests, ~1 s, no Electron
 npm run typecheck      # tsc --noEmit
 npm run build          # bundle into dist\ without launching
 npm run check:speech   # transcribe a WAV with the real engine
@@ -287,7 +287,7 @@ firebase/        Firestore rules and config, byte-identical to the macOS repo
 
 Be honest with whoever you hand this to:
 
-- **Verified:** the full test suite (546) and type-check; the bundle builds; the MCP server answers `initialize` / `tools/list`; the bar's layout and states were checked in a browser harness; CI builds the unsigned installer and portable exe on `windows-latest`.
+- **Verified:** the full test suite (547) and type-check; the bundle builds; the MCP server answers `initialize` / `tools/list`; the bar's layout and states were checked in a browser harness; CI builds the unsigned installer and portable exe on `windows-latest`.
 - **Not verified on real Windows hardware by the person who made this port** (it was developed on a Mac): hold-to-talk through the real keyboard hook, WebGPU transcription with large-v3-turbo, the UI Automation reader behind "learn from what you change", the active-window tracker, and the NSIS uninstall path. Step 4 above (`npm run check:speech`) and a manual dictation are the acceptance test for the first two; if any of them fails, the error text is what to report.
 - The `fp16`-encoder / `q4`-decoder weights for large-v3-turbo are the combination the transformers.js library uses for this exact model on WebGPU; they were not benchmarked here. `QUILL_DTYPE` overrides them.
 

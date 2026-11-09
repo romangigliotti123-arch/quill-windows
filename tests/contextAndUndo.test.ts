@@ -221,3 +221,19 @@ test('hands-free never claims it', () => {
     gesture: handsFree, triggerHeldFor: null, heardSpeech: false, hasInsertion: true,
   }), false);
 });
+
+test('the homophone table reads the same from a CRLF checkout', async () => {
+  // Git for Windows converts text files to CRLF. The table used to split on
+  // "\n" and then on " ", leaving "\r" on the last word of every line, so the
+  // second word of each group never matched a real word.
+  const { parseHomophoneGroups } = await import('../src/core/cleanup/homophoneTable');
+  const lf = parseHomophoneGroups('flower flour\nread reed\nread red\n');
+  const crlf = parseHomophoneGroups('flower flour\r\nread reed\r\nread red\r\n');
+  assert.deepEqual([...crlf.keys()].sort(), [...lf.keys()].sort());
+  assert.ok(crlf.get('flower')?.has('flour'), 'flour lost to a carriage return');
+  assert.ok(crlf.get('read')?.has('red') && crlf.get('read')?.has('reed'));
+  for (const [word, others] of crlf) {
+    assert.ok(!/[\r\n\t]/.test(word), `a control character in ${JSON.stringify(word)}`);
+    for (const other of others) assert.ok(!/[\r\n\t]/.test(other));
+  }
+});
