@@ -58,7 +58,7 @@ npm start        # builds, then launches Quill
 npm run dist:win
 ```
 
-**Expected:** `release\` contains an NSIS installer (`Quill Setup 1.3.2.exe`, about 224 MB, x64 and arm64 in one) and a portable executable (`Quill-1.3.2-portable.exe`, about 116 MB, x64). CI builds exactly these on every push; download them from the latest run's **Artifacts** on the Actions tab if you do not want to build. Both are **unsigned**, so Windows SmartScreen shows "Windows protected your PC" on first run — click **More info ▸ Run anyway**. That warning is honest: there is no code-signing certificate, and buying one is a yearly cost left to whoever ships this.
+**Expected:** `release\` contains an NSIS installer (`Quill Setup 1.3.2.exe`, about 224 MB, x64 and arm64 in one; GitHub shows it as `Quill.Setup.1.3.2.exe`) and a portable executable (`Quill-1.3.2-portable.exe`, about 116 MB, x64). CI builds exactly these on every push; download them from the latest run's **Artifacts** on the Actions tab if you do not want to build. Both are **unsigned**, so Windows SmartScreen shows "Windows protected your PC" on first run — click **More info ▸ Run anyway**. That warning is honest: there is no code-signing certificate, and buying one is a yearly cost left to whoever ships this.
 
 The installer is per-user (no admin prompt) and installs to `%LOCALAPPDATA%\Programs\Quill`.
 
@@ -143,7 +143,7 @@ Whisper is a batch model, not a streaming one, so Quill re-transcribes the whole
 
 **Stay on the default, `whisper-large-v3-turbo`.** It is the closest match to the Mac, and an 8 GB card runs it with room to spare.
 
-- **Accuracy.** The Mac app scored 2.37–2.81% word error rate on the 50-clip LibriSpeech corpus in its own head-to-head (Wispr Flow: 2.11%). Published LibriSpeech-clean figures put large-v3-turbo at about 1.9–2.0% and distil-large-v3 at about 2.4–2.5% ([WhisperKit's evaluation table](https://huggingface.co/argmaxinc/whisperkit-coreml/blob/20f51f218879660aa966596dfe336a762249abe8/README.md), [a faster-whisper benchmark](https://vexascribe.com/whisper-large-v3-vs-turbo); different tools and splits, so read them as a range, not a ranking to the decimal). Nothing smaller than the large family is in the Mac's accuracy class, and turbo is the most accurate of them.
+- **Accuracy.** The Mac app scored 2.37–2.81% word error rate on the 50-clip LibriSpeech corpus in its own head-to-head (Wispr Flow: 2.11%). [WhisperKit's LibriSpeech evaluation table](https://huggingface.co/argmaxinc/whisperkit-coreml/blob/20f51f218879660aa966596dfe336a762249abe8/README.md) lists large-v3-turbo at 2.03 and distil-large-v3 at 2.47 (the column labels were not visible when this was written — check the table before quoting them). Other write-ups disagree on exact values, so treat this as a ballpark: turbo is in the Mac's accuracy class and a little ahead of distil-large-v3. Nothing smaller than the large family is in the Mac's accuracy class, and turbo is the most accurate of them.
 - **Memory.** The files that load on the GPU are a 1.27 GB fp16 encoder and a 0.33 GB q4 decoder. Even with working memory on top, that is a few GB of the card's 8 — an estimate, not a measurement; the check below shows whether it loads.
 - **Why not distil-large-v3.** It keeps the same 32-layer encoder, which is where the time goes for short dictations, so it would be no faster here and a little less accurate.
 - **Speed is the one thing nobody has published for this exact setup** (Whisper through WebGPU on a 4060 Ti), so measure it instead of trusting a guess:
