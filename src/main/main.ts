@@ -395,7 +395,18 @@ app.whenReady().then(() => {
       try {
         const audio = decodeWav(new Uint8Array(readFileSync(transcribeFile)));
         const samples = resample(audio.samples, audio.sampleRate, 16_000);
-        const text = await speech.transcribeSamples(samples);
+        // `QUILL_TRANSCRIBE_RUNS=N` transcribes the same audio N times. The first
+        // run pays for the model load and the GPU's shader compilation; the later
+        // ones are the steady-state time a real dictation costs after you let go,
+        // which is the number that decides whether a model is fast enough.
+        const runs = Math.max(1, Math.min(20, Number(process.env.QUILL_TRANSCRIBE_RUNS) || 1));
+        const runMs: number[] = [];
+        let text = '';
+        for (let run = 0; run < runs; run += 1) {
+          const runStarted = Date.now();
+          text = await speech.transcribeSamples(samples);
+          runMs.push(Date.now() - runStarted);
+        }
         // eslint-disable-next-line no-console
         console.log('[quill/transcribe]', JSON.stringify({
           file: transcribeFile,
@@ -403,6 +414,7 @@ app.whenReady().then(() => {
           channels: audio.channels,
           seconds: Number((samples.length / 16_000).toFixed(2)),
           elapsedMs: Date.now() - started,
+          runMs,
           text,
         }, null, 2));
         // A non-zero exit on empty text, so this is usable as a CI check rather

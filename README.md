@@ -139,6 +139,29 @@ Choose in **Settings ▸ Speech model**. Models are downloaded once from Hugging
 
 Whisper is a batch model, not a streaming one, so Quill re-transcribes the whole buffer about every 900 ms to produce live partial text. That gives the live typer exactly the contract it was written against on the Mac.
 
+### Choosing a model for your GPU (RTX 4060 Ti, 8 GB)
+
+**Stay on the default, `whisper-large-v3-turbo`.** It is the closest match to the Mac, and an 8 GB card runs it with room to spare.
+
+- **Accuracy.** The Mac app scored 2.37–2.81% word error rate on the 50-clip LibriSpeech corpus in its own head-to-head (Wispr Flow: 2.11%). Published LibriSpeech-clean figures put large-v3-turbo at about 1.9–2.0% and distil-large-v3 at about 2.4–2.5% ([WhisperKit's evaluation table](https://huggingface.co/argmaxinc/whisperkit-coreml/blob/20f51f218879660aa966596dfe336a762249abe8/README.md), [a faster-whisper benchmark](https://vexascribe.com/whisper-large-v3-vs-turbo); different tools and splits, so read them as a range, not a ranking to the decimal). Nothing smaller than the large family is in the Mac's accuracy class, and turbo is the most accurate of them.
+- **Memory.** The files that load on the GPU are a 1.27 GB fp16 encoder and a 0.33 GB q4 decoder. Even with working memory on top, that is a few GB of the card's 8 — an estimate, not a measurement; the check below shows whether it loads.
+- **Why not distil-large-v3.** It keeps the same 32-layer encoder, which is where the time goes for short dictations, so it would be no faster here and a little less accurate.
+- **Speed is the one thing nobody has published for this exact setup** (Whisper through WebGPU on a 4060 Ti), so measure it instead of trusting a guess:
+
+```powershell
+$env:QUILL_TRANSCRIBE_RUNS = 5          # transcribe the clip five times
+npm run check:speech                    # look at "runMs" in the output
+```
+
+The **first** number in `runMs` includes loading the model and the GPU compiling its shaders. The **later** ones are what a real dictation costs after you let go — that is the figure to compare against how the Mac feels. As a rule of thumb, if the steady-state time on a short clip is well over a second, step down; to compare another model on the same card without touching your settings:
+
+```powershell
+$env:QUILL_SPEECH_MODEL = 'onnx-community/whisper-small.en'
+npm run check:speech
+```
+
+`whisper-small.en` is the next rung down: clearly faster, clearly less accurate than the Mac. Pick it only if turbo's measured speed is not good enough for you.
+
 ### The AI cleanup model (identical to the Mac)
 
 | | |
@@ -230,6 +253,8 @@ A file that exists but cannot be read is **never overwritten**: the store keeps 
 | `QUILL_DATA_DIR` | Use another data folder (for tests, screenshots, a second profile) |
 | `QUILL_NIM_API_KEY` | AI key; takes precedence over the file |
 | `QUILL_MODEL_DIR` | Keep the downloaded models somewhere else |
+| `QUILL_SPEECH_MODEL` | Use this speech model for one run, ignoring the setting (e.g. `onnx-community/whisper-small.en`) |
+| `QUILL_TRANSCRIBE_RUNS=N` | With `QUILL_TRANSCRIBE`, transcribe the file N times and report each run's time in `runMs` |
 | `QUILL_TRANSCRIBE=<file.wav>` | Transcribe that file with the real speech path, print it, exit non-zero if empty |
 | `QUILL_DTYPE=<json>` | Override the model weights, e.g. `{"encoder_model":"fp32","decoder_model_merged":"q4"}` |
 | `QUILL_SETTINGS_FILE`, `QUILL_HISTORY_FILE`, `QUILL_VOCABULARY_FILE` | Point one store at a scratch file |

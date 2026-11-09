@@ -169,7 +169,9 @@ export class WhisperTranscriber implements Transcriber {
     libraryURL: string; wasmURL: string; modelHost: string;
   } {
     return {
-      model: this.settings.current.speechModel,
+      // `QUILL_SPEECH_MODEL` overrides the setting for one run — how models are
+      // compared on a given GPU without editing anyone's settings file.
+      model: process.env.QUILL_SPEECH_MODEL || this.settings.current.speechModel,
       device: this.settings.current.speechUseGPU ? 'webgpu' : 'wasm',
       // Same origin as the page, so the module import survives the
       // `require-corp` policy that buys the threads.
