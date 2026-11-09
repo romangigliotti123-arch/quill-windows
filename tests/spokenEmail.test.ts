@@ -40,8 +40,8 @@ test('keeps a dot inside the local part', () => {
 
 test('glues a domain the recogniser split in two', () => {
   assert.equal(
-    email('send the invoice to noah at kass barbers dot com dot au'),
-    'send the invoice to noah@kassbarbers.com.au',
+    email('send the invoice to noah at acme barbers dot com dot au'),
+    'send the invoice to noah@acmebarbers.com.au',
   );
 });
 
@@ -72,8 +72,8 @@ test('lowercases the whole address', () => {
 
 test('handles a country domain already dotted', () => {
   assert.equal(
-    email('invoice noah at kassbarbers.com.au please'),
-    'invoice noah@kassbarbers.com.au please',
+    email('invoice noah at acmebarbers.com.au please'),
+    'invoice noah@acmebarbers.com.au please',
   );
 });
 
@@ -151,7 +151,7 @@ test('talking about a website does not produce an email address', () => {
   for (const said of [
     'read the docs at netlify.com',
     'my site at romangigliotti.com',
-    'the booking form at kassbarbers.com.au',
+    'the booking form at acmebarbers.com.au',
     'the pricing page at netlify.com',
     'the status page at firebase.google.com',
   ]) {
@@ -163,7 +163,7 @@ test('talking about a website does not produce an email address', () => {
 test('spoken addresses still form', () => {
   const fast = cleaner();
   for (const said of [
-    'send it to noah at kassbarbers.com.au',
+    'send it to noah at acmebarbers.com.au',
     'email me at roman at gmail dot com',
     'my address is romangigliotti123 at gmail dot com',
     'forward it to accounts at netlify.com',

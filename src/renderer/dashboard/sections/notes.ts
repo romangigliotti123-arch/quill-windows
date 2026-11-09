@@ -59,7 +59,7 @@ export async function renderNotes(root: HTMLElement): Promise<void> {
       list.appendChild(h('div', { class: 'row' },
         h('button', {
           class: 'grow',
-          style: 'all:unset;cursor:pointer;display:block;min-width:0',
+          style: 'all:unset;cursor:pointer;display:block;min-width:0;flex:1',
           onClick: () => { openId = note.id; void draw(); },
         },
           h('div', { class: 'primary truncate' }, displayTitle(note)),

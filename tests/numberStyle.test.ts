@@ -112,7 +112,7 @@ test('always words turns numerals into words', () => {
 
 test('every mode leaves structural numbers alone', () => {
   for (const transform of [spell, digits, words]) {
-    assert.equal(transform('mail noah@kassbarbers.com.au'), 'mail noah@kassbarbers.com.au');
+    assert.equal(transform('mail noah@acmebarbers.com.au'), 'mail noah@acmebarbers.com.au');
     assert.equal(transform('version 2.0 at 5:30'), 'version 2.0 at 5:30');
   }
 });

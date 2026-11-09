@@ -611,3 +611,4 @@ label.stack > span { display: block; font-size: 11.5px; color: var(--ink-tertiar
 .onboarding-dots { display: flex; gap: 6px; }
 .onboarding-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-quaternary); }
 .onboarding-dots i.on { background: var(--ink); }
+.onboarding-row .chip { white-space: nowrap; }

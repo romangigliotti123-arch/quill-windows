@@ -1,190 +1,296 @@
-# Quill
+# Quill for Windows
 
-Hold a key, speak, let go. The words land where your caret already is — in the
-terminal, in a chat box, in a form field, in whatever you were about to type in
-anyway.
+Dictation that runs on your PC. Hold a key, speak, let go — the words land wherever your caret already is: a terminal, a chat box, a form field, whatever you were about to type into.
 
-Windows, Linux and macOS. Transcription runs on your machine; nothing leaves it
-unless you turn the optional AI pass on yourself.
+This is **Quill for macOS v1.3.2 translated to Windows**. Same app, same behaviour, same thresholds, same AI cleanup model — rebuilt on Electron + TypeScript because Swift, AppKit and Apple's speech framework do not exist on Windows. Everything that is macOS-only was replaced rather than stubbed out; the table below says exactly what replaced what.
+
+- **Speech model: Whisper large-v3-turbo**, running on your GPU through WebGPU (it falls back to Whisper Base on the CPU if the machine has no usable GPU — see [the speech model](#the-speech-model)).
+- **AI cleanup model: `meta/llama-3.1-8b-instruct` on NVIDIA NIM** — the same model, endpoint, temperature and token limit as the Mac app. Optional; off until you add a free key.
+- **546 automated tests**, no Electron needed to run them. CI builds the Windows installer on a real Windows runner on every push.
+
+Upstream (macOS): <https://github.com/romangigliotti123-arch/quill> · License: MIT
 
 ---
 
-## What this is
+## Setup for an AI agent (do exactly this)
 
-Quill was a native macOS app: Swift, AppKit, `NSStatusItem`, Apple's
-`SpeechAnalyzer`, `CGEventTap`, `AXUIElement`. This is that app rebuilt so it
-runs on Windows and Linux as well, with the parts that only exist on a Mac
-replaced rather than stubbed out.
+If you are an agent that was handed this repository, this section is your whole job. Everything below works from a plain PowerShell prompt on Windows 10/11. Nothing needs a compiler or Visual Studio — the one native module (`uiohook-napi`) ships prebuilt binaries for `win32-x64` and `win32-arm64`.
 
-The behaviour is meant to be the same app, not a port that reads like one. The
-dictation coordinator, the cleanup passes, the vocabulary guards, the command
-router, the undo chord, the style learner and the live typer are the same logic
-with the same measured thresholds, and the comments that explain *why* a
-threshold is the number it is came across intact.
+### 0. Prerequisites
 
-## Getting it running
+| Need | Check | Install if missing |
+|---|---|---|
+| Windows 10 (1903+) or 11, x64 or arm64 | `winver` | — |
+| Git | `git --version` | `winget install --id Git.Git -e` |
+| Node.js **22 or newer** (with npm) | `node --version` | `winget install --id OpenJS.NodeJS.LTS -e` |
+| Internet, for `npm ci` and the first-run model download | — | — |
+| A GPU with DirectX 12 drivers, for the default model | Task Manager ▸ Performance | Update the GPU driver. Without one, Quill uses Whisper Base on the CPU automatically. |
 
-```sh
-npm install
-npm start          # build and launch
-npm run dev        # same, with the dashboard open
-npm test           # 303 tests, no Electron needed
+Open a **new** terminal after installing Git or Node so `PATH` is refreshed.
+
+### 1. Get it and verify the code
+
+```powershell
+git clone https://github.com/romangigliotti123-arch/quill-windows.git
+cd quill-windows
+npm ci
 npm run typecheck
+npm test
 ```
 
-To build installers:
+**Expected:** `npm ci` finishes without errors (warnings about install scripts are normal). `npm run typecheck` prints nothing after the command echo. `npm test` ends with `ℹ tests 546`, `ℹ pass 546`, `ℹ fail 0`.
 
-```sh
-npm run dist:win     # nsis installer + portable .exe
-npm run dist:linux   # AppImage, deb, rpm
-npm run dist:mac     # dmg, zip
+If `npm test` shows a failure, stop and report the failing test name — do not continue to the build.
+
+### 2. Run it
+
+```powershell
+npm start        # builds, then launches Quill
 ```
 
-Nothing is signed. Windows SmartScreen will warn on first run and macOS will
-need a right-click → Open; both warnings are honest, because there is no
-certificate. Buying one is a decision with a yearly bill attached, so it is left
-to whoever ships this.
+**Expected:** a Quill window opens (first run shows a four-step welcome), a small pill appears at the bottom-left of the screen, and a tray icon appears (Windows may hide it in the `^` overflow chevron — drag it out to keep it visible). Hold **Right Alt**, speak, let go — the text appears in whichever app has focus.
 
-## What replaced what
+`npm run dev` is the same but forces the dashboard open.
 
-| macOS original | Here | Cost of the substitution |
+### 3. Build the installer
+
+```powershell
+npm run dist:win
+```
+
+**Expected:** `release\` contains an NSIS installer (`Quill Setup 1.3.2.exe`) and a portable executable (`Quill-1.3.2-portable.exe`). Both are **unsigned**, so Windows SmartScreen shows "Windows protected your PC" on first run — click **More info ▸ Run anyway**. That warning is honest: there is no code-signing certificate, and buying one is a yearly cost left to whoever ships this.
+
+The installer is per-user (no admin prompt) and installs to `%LOCALAPPDATA%\Programs\Quill`.
+
+### 4. Prove the speech path works on this machine (no microphone needed)
+
+```powershell
+npm run check:speech
+```
+
+This runs the real speech engine — model download, the local model proxy, WebGPU or WebAssembly, the model itself — over the bundled clip `tests\fixtures\speech-check.wav`, prints the transcript, and **exits non-zero if nothing came back**. The first run downloads the model (about **1.6 GB** for the default), which takes a while and is cached in `%APPDATA%\Quill\models` afterwards.
+
+Transcribe your own file instead:
+
+```powershell
+npm run check:speech -- C:\path\to\clip.wav
+```
+
+### 5. Optional extras
+
+```powershell
+# AI cleanup (free key from https://build.nvidia.com/)
+Set-Content -Path "$env:APPDATA\Quill\nim-key.txt" -Value 'nvapi-...'   # or: $env:QUILL_NIM_API_KEY = 'nvapi-...'
+```
+
+The MCP server (lets Claude read how you write) and the optional account/sync are set up from inside the app — **MCP** and **Account** tabs — and both print the exact commands for this machine. See [MCP](#mcp-claude-can-write-like-you) and [Account](#the-optional-account).
+
+### 6. Report back
+
+State plainly: which of steps 1–4 passed (with the test count and the transcript from step 4), and anything that failed with its full error text. Do not describe step 4 as passing unless it printed a transcript and exited 0.
+
+---
+
+## What it does
+
+- **Push to talk.** Hold Right Alt and speak. Double-tap it for hands-free; tap it once to stop. Or use the **bar** — a small pill docked to a screen edge that widens on hover to a click-to-dictate button.
+- **Cleans up as it goes.** Punctuation, capitalisation, filler words, repeated words ("the the"), spoken numbers written the way you choose, spoken email addresses — all offline, in milliseconds.
+- **Terminals ask the words, not the window.** A shell command stays lowercase with no full stop; a sentence typed into the same terminal keeps its capital and full stop. Quill classifies the utterance, not the app.
+- **Spoken self-correction.** *"Send it to Noah, no wait, send it to Carlo"* types only Carlo — offline for the clear cases, with the model for the tangled ones.
+- **Finish, then Enter.** Release the key, tap it again right away, and Quill sends Return once your words have actually landed — never before.
+- **Takes it back.** `Ctrl + Alt + Z` deletes exactly what Quill inserted, after checking it is still there.
+- **Learns your words.** Names, tools and jargon go in the Dictionary and bias what the speech model *hears*. The **Correct** button on any dictation teaches the style profile and offers new Dictionary words (never added silently).
+- **Learns from what you change.** After a dictation Quill watches only the sentence it inserted and learns from your edits. Off with one switch.
+- **Snippets and transforms.** Say a phrase to expand a snippet. Hold the dictation key **plus the Windows key** and say "make that a bullet list" to reshape what you just dictated. The extra modifier is deliberate — plain dictation can never run a transform by accident just because a sentence happened to contain the words.
+- **Notes.** Dictate into a note directly, or click **Note** on the bar to catch a thought in a floating bubble that saves itself.
+- **Style export.** One button copies your writing voice as a plain document to hand to another AI.
+- **An optional account.** Sync history, Dictionary, snippets, transforms, learned style and your AI key to another computer — including a Mac — and unlock MCP.
+
+### Keys and shortcuts
+
+| | |
+|---|---|
+| **Right Alt** (hold) | Dictate. Change it in Settings; only a bare modifier can be the dictation key. |
+| **Right Alt** (double-tap) | Hands-free; tap once to stop |
+| **Right Alt + Windows key** (hold) | Dictate, with voice transforms allowed |
+| **Right Alt**, released then tapped | Finish, then press Enter |
+| **Esc** | Cancel the dictation and take back anything already typed |
+| **Ctrl + Alt + Z** | Take back the last thing Quill inserted |
+| **Ctrl + Alt + Q** | Open the dashboard (a way in when the tray icon is hidden) |
+
+> **European keyboard layouts:** Right Alt is **AltGr** there and types characters. Pick **Right Control** as the dictation key in Settings.
+
+---
+
+## The speech model
+
+Apple's `SpeechAnalyzer` (what the Mac app uses) is built into macOS and **cannot run on Windows**, so the speech model is the one thing that cannot be identical. Quill for Windows uses OpenAI's Whisper, run locally through [`@huggingface/transformers`](https://github.com/huggingface/transformers.js):
+
+| Model | Download | Notes |
 |---|---|---|
-| `SpeechAnalyzer` (streaming, built in) | Whisper via `@huggingface/transformers`, WebGPU with a CPU fallback | A ~210 MB download on first use. Whisper is batch, not streaming, so partials are produced by re-transcribing the whole buffer every 900 ms — which happens to give the live typer exactly the contract it was written against |
-| `NSStatusItem` | Electron `Tray` | Windows hides new tray icons in the overflow chevron. Linux has no tray in the Wayland protocol at all — it needs `libayatana-appindicator`, and GNOME needs an extension on top of that. So the tray is a convenience here, never the only way in |
-| `CGEventTap` | `uiohook-napi` | An optional dependency with prebuilt binaries. If it will not load, Quill still runs: the dashboard opens, the global shortcut works, and the hold-to-talk key is what is missing |
-| `CGEventKeyboardSetUnicodeString` | Clipboard + a synthetic paste | Quill borrows the clipboard for a few milliseconds and puts back exactly what was there. There is no cross-platform way to type arbitrary Unicode without a compiled native module |
-| `AXUIElement` / `NSWorkspace` | PowerShell on Windows, `xprop -root -spy` on X11, `swaymsg`/`hyprctl` on Wayland | Used only to tell a terminal from a text field, which changes capitalisation and the trailing full stop. When it cannot tell, everything is formatted as prose |
-| `NSSpellChecker` | A bundled 1.2M-word list | ~18 MB of RAM as one sorted string plus an `Int32Array` of offsets. Also *deterministic*: the macOS build asked the system checker and got Australian spellings marked as errors depending on which dictionary answered first |
-| `Locale`, `NSNumberFormatter` | `Intl` | Same behaviour, one implementation, no per-platform surprise |
-| The system accent colour | Quill's own teal | Windows and Linux do not expose one the way macOS does. Picking a colour is better than picking whichever grey each desktop defaults to |
+| **`whisper-large-v3-turbo`** (default) | ~1.6 GB | Best accuracy. A **GPU model**: WebGPU, encoder `fp16` + decoder `q4`. |
+| `whisper-small.en` | ~250 MB | More accurate than Base, slower |
+| `whisper-base.en` | ~80 MB | Fast on any CPU. What the default steps down to without a GPU. |
+| `whisper-tiny.en` | ~40 MB | Fastest, least accurate |
 
-## How the speech engine is put together
+Choose in **Settings ▸ Speech model**. Models are downloaded once from Hugging Face by Quill's main process and cached in `%APPDATA%\Quill\models`; after that everything is offline.
 
-The interesting decision is that the model and the microphone live in the same
-hidden window, and that window has no network.
+**Automatic step-down.** Large v3 turbo on a CPU would take roughly ten times longer than real time. If the GPU switch is off, or WebGPU cannot start on this machine, Quill loads Whisper Base instead and says so in Settings and Help — the dictation key never silently turns into a minute-long wait.
 
-`getUserMedia` and `AudioWorklet` only exist in a renderer, so the audio has to
-be captured there. The model is kept beside it because Whisper is fed the whole
-buffer from the start on every partial — the alternative is copying a growing
-`Float32Array` across an IPC boundary five times a second.
+Whisper is a batch model, not a streaming one, so Quill re-transcribes the whole buffer about every 900 ms to produce live partial text. That gives the live typer exactly the contract it was written against on the Mac.
 
-The main process is the only thing that talks to Hugging Face. It fetches model
-files with Electron's own network stack, caches them in `<data>/models/`, and
-serves them to the speech window from an origin that does not exist:
+### The AI cleanup model (identical to the Mac)
 
-```
-https://models.quill.invalid/hf/…       the model
-https://models.quill.invalid/runtime/…  the WebAssembly backend
-https://models.quill.invalid/app/…      the speech page itself
-```
+| | |
+|---|---|
+| Provider | NVIDIA NIM, OpenAI-compatible: `https://integrate.api.nvidia.com/v1` |
+| Model | `meta/llama-3.1-8b-instruct` |
+| Temperature / max tokens | `0` / `160` |
+| Deadline | 450 ms for the dictation path — if the model is slower, the deterministic result ships instead and you lose nothing but the deadline |
+| Key | Free from <https://build.nvidia.com/>. `%APPDATA%\Quill\nim-key.txt`, or `QUILL_NIM_API_KEY` (takes precedence). Paste it in Settings; it takes effect immediately. |
 
-`.invalid` is reserved by RFC 2606 and can never resolve, and the session
-handler refuses every request to any other host. So the window that executes
-WebAssembly compiled from a downloaded model cannot reach the internet — not
-because a header asks it not to, but because there is nothing there.
+Only the sentence being worked on is ever sent, and only when a key is set. Without a key every other feature works; only the model-backed transforms (Shorter, Summarise, More casual, Email) and the tangled self-corrections are unavailable.
 
-Three things fall out of that, and all three are better than what they replaced:
-the cache is a folder you can see, copy and delete; offline behaviour is
-deterministic, with no network call to time out; and the download percentage is
-bytes actually written rather than a guess.
+---
 
-It also has to be an `https` origin rather than a scheme of Quill's own, which
-cost a day to learn. `@huggingface/transformers` checks whether an optional file
-exists with a one-byte ranged GET, and that check begins by refusing any URL
-that is not `http:` or `https:`. Under a custom scheme every probe answers "does
-not exist", the pipeline is built with no tokenizer and no feature extractor
-**without raising anything**, and the first transcription dies on
-`Cannot read properties of null (reading 'feature_extractor')` — 200 MB and
-forty seconds away from the cause.
+## MCP: Claude can write like you
 
-## Verifying it without a microphone
+Quill includes a small, dependency-free MCP server (`dist\mcp\quill-mcp.js`) that exposes one tool, `get_writing_voice`: your learned writing patterns plus real excerpts of what you have dictated. It needs the optional account (sign in first).
 
-Dictation needs a person holding a key and speaking, which no build machine has.
-Since the speech engine is the part whose failure makes the rest pointless,
-there is an instrument for it:
+The **MCP** tab in the dashboard prints, for this machine's real paths:
 
-```sh
-QUILL_TRANSCRIBE=some-speech.wav npm start
+- a `claude mcp add quill …` command for Claude Code,
+- the JSON to merge into `%APPDATA%\Claude\claude_desktop_config.json` for Claude Desktop,
+- a prompt you can paste into Claude so it connects itself.
+
+From a source checkout the server is simply:
+
+```powershell
+node dist\mcp\quill-mcp.js        # speaks MCP over stdio
 ```
 
-It decodes the WAV, resamples to 16 kHz, runs the same pipeline the microphone
-feeds, prints the text, and exits non-zero if nothing came back. That is one
-command that proves the model downloads, the proxy serves it, the WebAssembly
-survived packaging, and the words are right — on any platform, with nobody
-watching.
+In an installed build it runs on Quill's own executable with `ELECTRON_RUN_AS_NODE=1`, so nothing else needs to be installed. Smoke test:
 
-Two more, for the interface:
-
-```sh
-QUILL_CAPTURE=./shots npm start   # a PNG of every screen
-QUILL_PROBE='<expression>' npm start   # evaluate it in the dashboard, print the result
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' | node dist\mcp\quill-mcp.js
 ```
 
-Set `QUILL_DATA_DIR` to a scratch folder for any of these. `npm run words`
-regenerates the bundled dictionary; `node scripts/seed_dev_data.mjs` fills a
-scratch data directory with plausible history and refuses to run without
-`QUILL_DATA_DIR` set.
+## The optional account
 
-## Measurements
+Everything works with no account. Signing in (Account tab) makes Quill sync six things with Firestore — dictation history, Dictionary, snippets, transforms, learned style, and your AI key — to any other machine signed into the same account, Mac or Windows. It uses **the same Firebase project and data layout as the macOS app**, so the two interoperate. Nothing is sent until you sign in. Sign-in tokens are sealed with Windows DPAPI (Electron `safeStorage`) when available.
 
-3.84 s of speech, M5 MacBook Air, model already cached:
+The Firebase web API key in `src/core/account/firebaseConfig.ts` (and `firebase/GoogleService-Info.plist`) is a public client identifier, not a secret — it is the same one the public macOS repository already ships; access is enforced by `firebase/firestore.rules`.
 
-| Backend | Decoder weights | Time |
+---
+
+## What replaced what (macOS → Windows)
+
+| macOS | Windows | Cost of the substitution |
 |---|---|---|
-| WebGPU | q4 | 2.8 s |
-| CPU (WASM) | q4 | 5.4 s |
-| CPU (WASM) | fp32 | 37.1 s — more accurate and unusable |
-| CPU (WASM) | q8 | fails to build a session |
+| `SpeechAnalyzer` (streaming, built in) | Whisper via `@huggingface/transformers`, WebGPU with CPU fallback | A one-time model download; partials come from re-transcribing the buffer |
+| `NSStatusItem` | Electron `Tray` | Windows hides new tray icons in the `^` overflow, so the tray is a convenience — `Ctrl+Alt+Q` and the bar are the other ways in |
+| `CGEventTap` | `uiohook-napi` (optional dependency with prebuilt binaries) | If it will not load, Quill still runs: the dashboard and global shortcuts work; only hold-to-talk is missing |
+| `CGEventKeyboardSetUnicodeString` | Clipboard + synthetic `Ctrl+V` | The clipboard is borrowed for a few milliseconds and restored exactly |
+| `AXUIElement` / `NSWorkspace` | PowerShell: active-window tracking and UI Automation text reading | Used to tell a terminal from a text field and to read the sentence being edited. When it cannot tell, text is formatted as prose |
+| `NSSpellChecker` | A bundled 1.2M-word list | Deterministic across machines |
+| ⌘ (transform gesture) | Windows key | Same gesture shape |
+| Overlay `NSPanel`s | Frameless transparent `BrowserWindow`s (`focusable: false` so a click never steals the caret) | — |
+| Codesign / TCC permissions | Nothing to grant: the keyboard hook needs no permission; Windows prompts for the microphone itself | — |
+| `NSAlert` + Trash uninstall | Runs the NSIS uninstaller after erasing data (refuses, and erases nothing, for portable/dev builds) | — |
 
-So `q4` on both, which also means switching between CPU and GPU costs no second
-download. `q8` is the obvious choice for a CPU backend and does not load at all:
-`Missing required scale: model.decoder.embed_tokens.weight_merged_0_scale`, out
-of the runtime's own quantisation pass, on the published weights.
+**Ported unchanged (same logic, same measured thresholds, same comments explaining why):** the dictation coordinator, hotkey gesture state machine, fast and AI cleanup passes, vocabulary corrector and homophone guards, self-correction, spoken-email, number styles, command router, transforms, insertion undo, live typer, style learner, correction learning, voice export, account merge and sync engine, MCP protocol.
 
-The speech page *is* cross-origin isolated — it is served with COOP and COEP, so
-`SharedArrayBuffer` exists and asking for four threads gives four. Both ways of
-using them fail on this runtime: on the main thread the first inference never
-returns, and in a proxy worker the worker dies at construction. One thread it
-is. The isolation is left in place because it costs nothing and is the hard
-part; if a later runtime fixes the worker, it is a one-line change.
+**Not ported (macOS-only by nature):** the "Has it crashed?" card (reads macOS crash reports), codesign/notarisation scripts, the Wispr Flow accuracy rig under `rig/`, TCC permission screens.
 
-## The honest caveats
+---
 
-Things that work less well here than they did on macOS, or than they should:
+## Your data
 
-- **Wayland.** The keyboard hook needs read access to `/dev/input/event*`, which
-  usually means adding yourself to the `input` group and logging out and back
-  in. X11 needs nothing. There is no way around this that does not involve a
-  compositor-specific protocol.
-- **The Linux tray** needs `libayatana-appindicator3`, and GNOME needs the
-  AppIndicator extension on top. Packaged as a *recommends*, not a *depends*,
-  because Quill is usable without a tray and a hard dependency would refuse to
-  install on a system that has none.
-- **AltGr.** On most continental European layouts, right Alt *is* AltGr and
-  types characters. Quill's default key is right Alt. Settings says so, and
-  right Control is the sane choice on those layouts.
-- **The clipboard is borrowed** on every insertion, and put back. If another app
-  reads the clipboard on a timer, it may see a fragment of your dictation. The
-  macOS build had the same trade-off in live-typing mode; here it applies to
-  both modes, because nothing cross-platform can type arbitrary Unicode.
-- **Undo verification is skipped in terminals**, because it works by reselecting
-  and copying, and in a terminal `Ctrl+C` is SIGINT rather than copy.
-- **Nothing is signed**, as above.
+Everything lives in `%APPDATA%\Quill\` as plain JSON you can read and edit:
 
-## Where things live
+| File | Holds |
+|---|---|
+| `history.json` | every dictation (kept for a month by default; day / week / forever in Settings) |
+| `settings.json` | hotkeys, microphone, speech model, toggles |
+| `vocabulary.json` | the Dictionary |
+| `snippets.json`, `transforms.json`, `notes.json` | exactly what they say |
+| `style.json` | the learned writing style — **kept** by "Erase everything" and Uninstall; it has its own **Delete my style** button |
+| `nim-key.txt` | the AI key |
+| `account.json`, `device.json` | sign-in session and device identity |
+| `models\` | downloaded speech models |
+
+A file that exists but cannot be read is **never overwritten**: the store keeps a copy and stops writing, because replacing a damaged-but-recoverable file with defaults is the one unrecoverable mistake. Files are read key by key with defaults for anything absent, so a field added in a later version never makes older records undecodable (`tests/upgradeSurvival.test.ts` holds the exact bytes of earlier formats).
+
+**Settings ▸ Your data ▸ Erase everything** resets the app to day one. **Settings ▸ About ▸ Uninstall** erases and runs the uninstaller.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `QUILL_DATA_DIR` | Use another data folder (for tests, screenshots, a second profile) |
+| `QUILL_NIM_API_KEY` | AI key; takes precedence over the file |
+| `QUILL_MODEL_DIR` | Keep the downloaded models somewhere else |
+| `QUILL_TRANSCRIBE=<file.wav>` | Transcribe that file with the real speech path, print it, exit non-zero if empty |
+| `QUILL_DTYPE=<json>` | Override the model weights, e.g. `{"encoder_model":"fp32","decoder_model_merged":"q4"}` |
+| `QUILL_SETTINGS_FILE`, `QUILL_HISTORY_FILE`, `QUILL_VOCABULARY_FILE` | Point one store at a scratch file |
+| `QUILL_PROBE=<js>`, `QUILL_CAPTURE=<dir>` | Evaluate an expression in the dashboard / render every screen to PNGs |
+| `QUILL_PROXY_LOG` | Trace every model request (`QUILL_PROXY_LOG=1`) |
+
+---
+
+## Commands
+
+```powershell
+npm ci                 # install exactly what package-lock.json says
+npm start              # build + launch
+npm run dev            # same, with the dashboard open
+npm test               # 546 tests, ~1 s, no Electron
+npm run typecheck      # tsc --noEmit
+npm run build          # bundle into dist\ without launching
+npm run check:speech   # transcribe a WAV with the real engine
+npm run dist:win       # unsigned NSIS installer + portable exe in release\
+npm run words          # regenerate the bundled word list
+```
+
+## Repo layout
 
 ```
-src/core/        no Electron, no DOM — cleanup, stores, style, hotkey logic,
-                 transforms, the dictionary, the WAV reader, the mark
-src/main/        windows, tray, the keyboard hook, injection, the speech engine's
-                 main-process half, the model proxy, IPC
-src/preload/     three narrow bridges, one per window
-src/renderer/    the dashboard, the overlay, the speech page
-tests/           303 tests over src/core, run with node:test
-scripts/         build, dictionary generation, icon generation, dev seeding
+src/core/        everything pure — no Electron — so it is all unit-tested
+  cleanup/ ai/ style/ stores/ transforms/ hotkey/ account/ insights/ text/ dictation/
+src/main/        Electron main process: hotkey engine, speech engine, dictation coordinator,
+                 insertion, windows (dashboard, HUD, bar, note bubble), tray, IPC, account service
+src/mcp/         the stdio MCP server (separate bundle, no dependencies)
+src/preload/     the narrow doors each window is allowed through
+src/renderer/    dashboard, HUD, bar, note bubble, and the hidden speech window
+tests/           node:test suites over src/core (+ fixtures\speech-check.wav)
+scripts/         build, icon, word list, speech check
+firebase/        Firestore rules and config, byte-identical to the macOS repo
+.github/         CI (Windows + Linux) and the release workflow
 ```
 
-Your data lives in `%APPDATA%\Quill` on Windows, `$XDG_CONFIG_HOME/quill` (or
-`~/.config/quill`) on Linux, and `~/Library/Application Support/Quill` on macOS.
-Plain JSON, one file per thing, and the Settings screen has a button that erases
-all of it and says exactly what it will delete.
+`src/main/main.ts` is the only file that knows about every subsystem; everything else is constructed once and handed what it needs.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Holding the key does nothing | The keyboard hook did not load. The **Help** tab runs diagnostics and says why. Start dictation from the bar or the tray meanwhile. |
+| "Push-to-talk is unavailable" | `uiohook-napi` is an optional dependency; reinstall with `npm ci` (no `--omit=optional`). |
+| AltGr characters appear / key types symbols | European layout: choose Right Control in Settings. |
+| Text goes to the clipboard instead of the app | The target blocked synthetic paste (an elevated app: Quill cannot type into an app running as administrator unless Quill is too). |
+| First dictation is slow | The model is still downloading — see the percentage in the sidebar. Use `npm run check:speech` to prime the cache. |
+| "Large v3 turbo needs a GPU and none is available" | WebGPU could not start; Base was loaded instead. Update the GPU driver, or pick Base deliberately to silence it. |
+| SmartScreen warning on the installer | Expected: the build is unsigned. More info ▸ Run anyway. |
+| Tray icon missing | Windows hid it. Click `^` in the taskbar and drag it out, or use `Ctrl+Alt+Q`. |
+
+## What has and has not been verified
+
+Be honest with whoever you hand this to:
+
+- **Verified:** the full test suite (546) and type-check; the bundle builds; the MCP server answers `initialize` / `tools/list`; the bar's layout and states were checked in a browser harness; CI builds the unsigned installer and portable exe on `windows-latest`.
+- **Not verified on real Windows hardware by the person who made this port** (it was developed on a Mac): hold-to-talk through the real keyboard hook, WebGPU transcription with large-v3-turbo, the UI Automation reader behind "learn from what you change", the active-window tracker, and the NSIS uninstall path. Step 4 above (`npm run check:speech`) and a manual dictation are the acceptance test for the first two; if any of them fails, the error text is what to report.
+- The `fp16`-encoder / `q4`-decoder weights for large-v3-turbo are the combination the transformers.js library uses for this exact model on WebGPU; they were not benchmarked here. `QUILL_DTYPE` overrides them.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE). Quill for macOS and this Windows port are by Roman Gigliotti.

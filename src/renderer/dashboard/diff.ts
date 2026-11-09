@@ -19,7 +19,7 @@ export function diffWords(before: string, after: string): DocumentFragment {
   // Keeping whitespace as its own token was the obvious thing and it renders
   // badly: a run of deletions followed by a run of insertions consumes the
   // separators asymmetrically, and the two runs come out welded together —
-  // "dot aunoah@kassbarbers.com.au". This pane is an annotation of what
+  // "dot aunoah@acmebarbers.com.au". This pane is an annotation of what
   // changed, not a reproduction of the original spacing, so a single space
   // between pieces is both correct and readable.
   const a = before.split(/\s+/).filter((piece) => piece.length > 0);

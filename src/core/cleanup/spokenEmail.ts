@@ -59,7 +59,7 @@ export function formatSpokenEmails(text: string): string {
 interface Domain { text: string; lastIndex: number }
 
 /// A domain starting at `start`, either already dotted ("gmail.com") or spoken
-/// ("gmail dot com", "kass barbers dot com dot au"). Null when there is none,
+/// ("gmail dot com", "acme barbers dot com dot au"). Null when there is none,
 /// which is the answer for almost every "at" in ordinary speech.
 function readDomain(tokens: string[], start: number): Domain | null {
   if (start >= tokens.length) return null;
@@ -72,7 +72,7 @@ function readDomain(tokens: string[], start: number): Domain | null {
   }
 
   // Spoken. Words up to the first "dot" are one label glued together — the
-  // recogniser splits "kassbarbers" into "kass barbers" as readily as a name.
+  // recogniser splits "acmebarbers" into "acme barbers" as readily as a name.
   let label = '';
   let index = start;
   while (index < tokens.length && bareWord(tokens[index]!).toLowerCase() !== 'dot') {
@@ -231,7 +231,7 @@ export const LOCAL_PART_STOP_WORDS = new Set([
   'this', 'that', 'these', 'those', 'it', 'them', 'us', 'me', 'him',
   'and', 'or', 'but', 'of', 'in', 'on', 'for', 'with', 'from', 'by', 'at',
   // The verbs that introduce a recipient. Without them "invoice noah at
-  // kassbarbers.com.au" addresses mail to invoicenoah.
+  // acmebarbers.com.au" addresses mail to invoicenoah.
   'send', 'sent', 'sends', 'sending', 'invoice', 'invoiced', 'forward',
   'forwarded', 'cc', 'bcc', 'contact', 'reach', 'ping', 'message', 'messaged',
   'write', 'wrote', 'text', 'texted', 'call', 'called', 'add', 'invite',
@@ -281,7 +281,7 @@ function isTopLevelDomain(word: string): boolean {
 /// Dotted names that are not places you can send mail.
 export const NON_MAIL_SUFFIXES = new Set(['js', 'ts', 'py', 'rb', 'sh', 'md', 'json', 'swift']);
 
-/// "gmail.com" and "kassbarbers.com.au" yes; "node.js" and "1.4" no.
+/// "gmail.com" and "acmebarbers.com.au" yes; "node.js" and "1.4" no.
 ///
 /// The ".js" exclusion is why this is a list rather than a shape test: three.js
 /// and node.js are exactly the shape of a domain, they are named in dictation

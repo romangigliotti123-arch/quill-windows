@@ -18,8 +18,8 @@ if (!dir) {
 mkdirSync(dir, { recursive: true });
 
 const SAMPLES = [
-  ['send it to noah at kass barbers dot com dot au and tell him the frames are ready',
-   'Send it to noah@kassbarbers.com.au and tell him the frames are ready.'],
+  ['send it to noah at acme barbers dot com dot au and tell him the frames are ready',
+   'Send it to noah@acmebarbers.com.au and tell him the frames are ready.'],
   ['push the graph if I build to neglify tonight', 'Push the graphify build to Netlify tonight.'],
   ['the page loads in about one. 4 seconds on a cold cache',
    'The page loads in about 1.4 seconds on a cold cache.'],

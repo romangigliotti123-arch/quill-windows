@@ -159,7 +159,7 @@ test('nothing personal can ever be shipped in the seed', () => {
   // failure it exists to catch is somebody adding a starter set back, and that
   // is exactly when nobody is looking for this test.
   const text = JSON.stringify(snippetSeed());
-  for (const personal of ['gigliotti', 'romandesign', 'kassbarbers', 'roman']) {
+  for (const personal of ['gigliotti', 'romandesign', 'acmebarbers', 'roman']) {
     assert.ok(!text.toLowerCase().includes(personal), `the seed names ${personal}`);
   }
   // And any trigger made of one ordinary word must be `alone`, or it fires
