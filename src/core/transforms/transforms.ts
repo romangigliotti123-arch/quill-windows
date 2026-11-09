@@ -462,7 +462,7 @@ export function transformSeed(): Transform[] {
       // "No subject line" is spelled out because a live run put one in unasked —
       // and a subject line pasted into a Slack message or a reply box is
       // invented scaffolding in the wrong place.
-      instruction: 'Rewrite the text as a short email body: one greeting line, the body, and a sign-off.\n'
+      instruction: 'Rewrite the text as a short email body: one greeting line, the body, and a sign-off line ("Thanks," or "Cheers,") followed by "[Your name]" on its own line.\n'
         + 'No subject line, no headers, no "Subject:".\n'
         + 'Keep the body to what the text actually says — do not invent context, deadlines, prices or names.\n'
         + 'If the recipient is not named in the text, open with "Hey —". Return only the email.',
@@ -543,6 +543,16 @@ export class TransformStore {
         this.loadFailed = true;
         break;
     }
+  }
+
+  /// See `HistoryStore.reloadFromDisk`. Listeners are told, because a synced
+  /// transform may have gained or lost a global chord.
+  reloadFromDisk(): void {
+    if (!this.url) return;
+    const outcome = readStoreFile(this.url, validate);
+    if (outcome.kind !== 'decoded') return;
+    this.items = outcome.value;
+    for (const listener of this.listeners) listener();
   }
 
   onChange(listener: () => void): void { this.listeners.push(listener); }

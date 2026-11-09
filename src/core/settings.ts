@@ -1,7 +1,27 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { dataFile } from './paths';
+
+/// Where the always-on overlay bar docks. Five spots rather than free
+/// placement — a bar that can land anywhere needs a drag gesture and a saved
+/// point per display; five names cover what anyone actually wants and read back
+/// as plain English in Settings.
+export type OverlayBarPosition =
+  'bottomCenter' | 'bottomLeft' | 'bottomRight' | 'topLeft' | 'topRight';
+
+export const OVERLAY_BAR_POSITIONS: OverlayBarPosition[] =
+  ['bottomCenter', 'bottomLeft', 'bottomRight', 'topLeft', 'topRight'];
+
+export function overlayBarPositionLabel(position: OverlayBarPosition): string {
+  switch (position) {
+    case 'bottomCenter': return 'Bottom center';
+    case 'bottomLeft': return 'Bottom left';
+    case 'bottomRight': return 'Bottom right';
+    case 'topLeft': return 'Top left';
+    case 'topRight': return 'Top right';
+  }
+}
 
 /// How a spoken number reaches the page.
 export type NumberStyle = 'asHeard' | 'spellOutSmall' | 'alwaysDigits' | 'alwaysWords';
@@ -119,6 +139,32 @@ export interface SettingsValues {
   launchAtLogin: boolean;
   /** Open the dashboard on launch, rather than only living in the tray. */
   showDashboardOnLaunch: boolean;
+  /** The always-on bar — a click to start or stop instead of holding a key. On
+   *  by default: it is the feature being asked for, not an opt-in extra. */
+  overlayBarEnabled: boolean;
+  /** Bottom left, not bottom centre. Centre puts the bar over the middle of
+   *  whatever you are dictating into, which is where the text you are watching
+   *  appear tends to be. */
+  overlayBarPosition: OverlayBarPosition;
+  /** A second segment on the bar for starting a note straight into a fresh
+   *  dictation. On by default: off, nobody discovers Notes exists at all, and
+   *  the bar is the only place it is ever advertised. */
+  overlayShowsNewNoteButton: boolean;
+  /** Release the dictation key, then tap it again right away: once cleanup and
+   *  insertion actually finish — never before — Quill sends Return. On by
+   *  default, same reasoning as `overlayBarEnabled`. */
+  finishThenEnterEnabled: boolean;
+  /** After a dictation, watch the sentence Quill inserted and learn from what
+   *  the user changes about it. On by default, and that is the argued-about
+   *  part: it only ever reads the span Quill itself produced, never the
+   *  surrounding document, and nothing leaves the machine. A feature that
+   *  learns nothing until it is found in Settings learns nothing. */
+  learnFromEdits: boolean;
+  /** The version of Quill that last launched here. Not a setting — nobody
+   *  changes it — but it lives in settings.json because that file's existence
+   *  already means "this machine has run Quill before", and a second state file
+   *  is a second thing to fall out of sync. It exists to notice an update. */
+  lastLaunchedVersion: string | null;
 }
 
 export const DEFAULT_ACCELERATOR_UNDO =
@@ -137,10 +183,20 @@ export function defaultSettings(): SettingsValues {
     historyRetention: 'month',
     contextRecovery: true,
     insertionStrategy: 'paste',
-    speechModel: 'onnx-community/whisper-base.en',
+    // Large v3 turbo: the most accurate model Whisper ships that is still fast
+    // on a GPU. It is a WebGPU model — on a machine without one, or with the GPU
+    // switch off, the speech engine loads Base instead and says so. See
+    // `renderer/stt/stt.js`.
+    speechModel: 'onnx-community/whisper-large-v3-turbo',
     speechUseGPU: true,
     launchAtLogin: false,
     showDashboardOnLaunch: true,
+    overlayBarEnabled: true,
+    overlayBarPosition: 'bottomLeft',
+    overlayShowsNewNoteButton: true,
+    finishThenEnterEnabled: true,
+    learnFromEdits: true,
+    lastLaunchedVersion: null,
   };
 }
 
@@ -153,6 +209,10 @@ export class QuillSettings extends EventEmitter {
   private readonly url: string;
   private values: SettingsValues;
   private capturing = false;
+  /// Set when settings.json exists and will not parse. While it is set the file
+  /// is never written, because the alternative is replacing whatever is in
+  /// there with a set of defaults the moment the user changes one setting.
+  private loadFailed = false;
 
   /// Tests pass their own path. A self-test that rewrites the real settings
   /// file would change the app under the person running it.
@@ -190,6 +250,12 @@ export class QuillSettings extends EventEmitter {
   get historyRetention(): HistoryRetention { return this.values.historyRetention; }
   get contextRecovery(): boolean { return this.values.contextRecovery; }
   get insertionStrategy(): InsertionStrategy { return this.values.insertionStrategy; }
+  get overlayBarEnabled(): boolean { return this.values.overlayBarEnabled; }
+  get overlayBarPosition(): OverlayBarPosition { return this.values.overlayBarPosition; }
+  get overlayShowsNewNoteButton(): boolean { return this.values.overlayShowsNewNoteButton; }
+  get finishThenEnterEnabled(): boolean { return this.values.finishThenEnterEnabled; }
+  get learnFromEdits(): boolean { return this.values.learnFromEdits; }
+  get lastLaunchedVersion(): string | null { return this.values.lastLaunchedVersion; }
 
   /// True when one key does both jobs, which is the default and means
   /// push-to-talk is reached by double-tapping rather than by a key of its own.
@@ -220,6 +286,42 @@ export class QuillSettings extends EventEmitter {
     });
   }
 
+  /// Write the current values to disk whether or not anything in them changed.
+  ///
+  /// First-run detection is "settings.json does not exist" — deliberately, so
+  /// an erase brings setup back with no extra flag to fall out of sync. That
+  /// makes finishing onboarding responsible for creating the file even when the
+  /// person accepted every default and changed nothing, which is the common
+  /// case. `update` above returns early when nothing moved, so setting a value
+  /// to itself never reached `save` and the file could only ever be created by
+  /// changing something — onboarding came back on every launch for anyone who
+  /// took the defaults, forever, with nothing on screen explaining why.
+  markConfigured(): void {
+    this.save();
+  }
+
+  /// Records the running version and answers what the previous one was, or
+  /// null on the first launch of a machine that has run Quill before but never
+  /// recorded it. Returns the old value rather than a bool because the caller
+  /// wants to know whether this launch is the first after an update, and that
+  /// is the only question this answers.
+  noteLaunch(version: string): string | null {
+    const previous = this.values.lastLaunchedVersion;
+    if (previous !== version) this.set('lastLaunchedVersion', version);
+    return previous;
+  }
+
+  /// Three states, not two: there is no settings file yet, there is one and it
+  /// read, or there is one and it could not be read. The last two call for
+  /// opposite behaviour. Every field below is validated on decode so a file
+  /// from an older or newer build always reads; getting to the catch means the
+  /// bytes are not JSON at all — a partial write during a crash, a full disk, a
+  /// hand-edit with a trailing comma. Running on defaults and then atomically
+  /// writing them over the top the moment the user changed any single setting
+  /// would lose the chosen microphone, the rebound key, the retention period
+  /// and every toggle, silently, along with the file that could have been
+  /// rescued by hand. So: refuse to write, keep a copy of what could not be
+  /// read, and carry on with defaults in memory.
   private load(): void {
     let raw: string;
     try {
@@ -231,9 +333,15 @@ export class QuillSettings extends EventEmitter {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // A settings file written by an older build, or half-written during a
-      // crash, must never stop the app launching. Defaults, and the file is
-      // left alone until something actually changes.
+      this.loadFailed = true;
+      try {
+        const copy = `${this.url}.unreadable-${Date.now()}`;
+        if (existsSync(this.url)) copyFileSync(this.url, copy);
+      } catch {
+        // A failed backup must not stop the app launching.
+      }
+      // eslint-disable-next-line no-console
+      console.error('[quill] settings.json is unreadable — keeping a copy and not saving over it.');
       return;
     }
     if (!parsed || typeof parsed !== 'object') return;
@@ -248,7 +356,13 @@ export class QuillSettings extends EventEmitter {
       // settings file away. It matters most for retention — the consequence of
       // losing that one is that the app starts deleting on a schedule the user
       // did not pick.
-      if (typeof value !== typeof fallback[key] && value !== null) continue;
+      //
+      // The nullable string fields (chosen microphone, its label, last launched
+      // version) default to null, whose `typeof` is "object" — so a plain
+      // typeof comparison threw away every stored string and the chosen
+      // microphone never survived a restart. Those three accept a string too.
+      const expected = fallback[key] === null ? 'string' : typeof fallback[key];
+      if (typeof value !== expected && value !== null) continue;
       (merged as unknown as Record<string, unknown>)[key] = value;
     }
     if (!NUMBER_STYLES.includes(merged.numberStyle)) merged.numberStyle = fallback.numberStyle;
@@ -258,10 +372,15 @@ export class QuillSettings extends EventEmitter {
     if (merged.insertionStrategy !== 'paste' && merged.insertionStrategy !== 'type') {
       merged.insertionStrategy = fallback.insertionStrategy;
     }
+    if (!OVERLAY_BAR_POSITIONS.includes(merged.overlayBarPosition)) {
+      merged.overlayBarPosition = fallback.overlayBarPosition;
+    }
     this.values = merged;
   }
 
   private save(): void {
+    // Never overwrite a file we failed to read. See `load`.
+    if (this.loadFailed) return;
     try {
       mkdirSync(dirname(this.url), { recursive: true });
       const temporary = `${this.url}.tmp`;

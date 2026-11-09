@@ -26,6 +26,10 @@ export interface SpeechStatus {
   /// True when the GPU was asked for and the machine could not provide it. The
   /// user asked for a setting and did not get it, so they are told.
   fellBackToCPU: boolean;
+  /// True when the chosen model is a GPU-only one (large-v3-turbo) and this
+  /// run had no GPU, so Base is loaded in its place. `model` above says which
+  /// one is actually running.
+  fellBackToSmallerModel: boolean;
   downloading: ModelProgress | null;
   lastError: string | null;
 }
@@ -47,7 +51,7 @@ export class WhisperTranscriber implements Transcriber {
   private readonly deviceRequests = new Map<number, Resolver<{ id: string; label: string }[]>>();
   private status: SpeechStatus = {
     ready: false, device: null, model: null, fellBackToCPU: false,
-    downloading: null, lastError: null,
+    fellBackToSmallerModel: false, downloading: null, lastError: null,
   };
   private statusListeners: ((status: SpeechStatus) => void)[] = [];
   /// A dictation that has been asked to stop but whose final has not arrived.
@@ -347,11 +351,12 @@ export class WhisperTranscriber implements Transcriber {
         return;
       }
       case 'stt:ready': {
-        const { device, model, fellBack } = payload as {
-          device: 'webgpu' | 'wasm'; model: string; fellBack?: boolean;
+        const { device, model, fellBack, fellBackModel } = payload as {
+          device: 'webgpu' | 'wasm'; model: string; fellBack?: boolean; fellBackModel?: boolean;
         };
         this.publishStatus({
           ready: true, device, model, fellBackToCPU: fellBack === true,
+          fellBackToSmallerModel: fellBackModel === true,
           downloading: null, lastError: null,
         });
         return;

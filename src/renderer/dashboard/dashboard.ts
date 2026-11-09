@@ -7,9 +7,12 @@ import { renderDictionary } from './sections/dictionary';
 import { renderSnippets } from './sections/snippets';
 import { renderStyle } from './sections/style';
 import { renderTransforms } from './sections/transforms';
-import { renderScratchpad } from './sections/scratchpad';
+import { renderNotes } from './sections/notes';
+import { renderMCP, NAVIGATE } from './sections/mcp';
+import { renderAccount, accountApi, ACCOUNT_CHANGED } from './sections/account';
 import { renderSettings } from './sections/settings';
 import { renderHelp } from './sections/help';
+import { maybeShowOnboarding } from './onboarding';
 
 /// The dashboard's information architecture.
 ///
@@ -35,12 +38,16 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: 'insights', title: 'Insights', render: renderInsights },
   { id: 'dictation', title: 'Dictation', render: renderDictation },
+  { id: 'notes', title: 'Notes', render: renderNotes },
   { id: 'dictionary', title: 'Dictionary', render: renderDictionary },
   { id: 'snippets', title: 'Snippets', render: renderSnippets },
   { id: 'style', title: 'Style', render: renderStyle },
   { id: 'transforms', title: 'Transforms', render: renderTransforms },
-  { id: 'notetaker', title: 'Notetaker', render: renderNotetaker },
-  { id: 'scratchpad', title: 'Scratchpad', render: renderScratchpad },
+  // Gated behind sign-in: MCP reads the writing voice and history through the
+  // account, so the row dims itself while signed out. It still opens — the
+  // screen explains what signing in unlocks.
+  { id: 'mcp', title: 'MCP', render: renderMCP },
+  { id: 'account', title: 'Account', render: renderAccount, footer: true },
   { id: 'settings', title: 'Settings', render: renderSettings, footer: true },
   { id: 'help', title: 'Help', render: renderHelp, footer: true },
 ];
@@ -52,6 +59,8 @@ let current = 'insights';
 let settings: SettingsValues | null = null;
 let speech: SpeechStatus | null = null;
 let activity: 'idle' | 'listening' | 'transcribing' = 'idle';
+/// Whether anyone is signed in. Only the MCP row reads it.
+let signedIn = false;
 
 function stateLine(): string {
   if (activity === 'listening') return 'Listening…';
@@ -84,6 +93,8 @@ function navRow(section: Section): HTMLElement {
   return h('button', {
     class: 'nav-row',
     'aria-current': section.id === current ? 'page' : undefined,
+    style: section.id === 'mcp' && !signedIn ? 'opacity:0.5' : undefined,
+    title: section.id === 'mcp' && !signedIn ? 'Sign in to use MCP' : undefined,
     onClick: () => { void go(section.id); },
   },
     h('span', { class: 'glyph' }, icon(section.id)),
@@ -112,25 +123,20 @@ async function go(id: string): Promise<void> {
   }
 }
 
-function renderNotetaker(root: HTMLElement): void {
-  clear(root);
-  root.appendChild(pageHead('Notetaker'));
-  root.appendChild(message({
-    title: 'Not built yet',
-    // Written for the person reading it, not for whoever built it. Three
-    // things, in the language of someone who wants to record a meeting.
-    body: 'Quill cannot sit in on a meeting yet. Three things have to land first.',
-    steps: [
-      'Hearing the other side of the call, not just your microphone.',
-      'Knowing from your calendar when a meeting starts.',
-      'Telling one voice from another in the transcript.',
-    ],
-  }));
-}
-
 async function boot(): Promise<void> {
   settings = await api.settings.get();
   speech = await api.speech.status();
+  signedIn = (await accountApi.get().catch(() => null)) !== null;
+
+  // Sign-in state changes from the Account screen; the MCP row follows without
+  // the sidebar needing a reference to whatever triggered it.
+  window.addEventListener(ACCOUNT_CHANGED, (event) => {
+    signedIn = (event as CustomEvent).detail !== null;
+    drawSidebar();
+  });
+  window.addEventListener(NAVIGATE, (event) => {
+    void go(String((event as CustomEvent).detail));
+  });
 
   api.on('settings', (payload) => {
     settings = payload as SettingsValues;
@@ -149,6 +155,7 @@ async function boot(): Promise<void> {
       || speech.device !== next.device
       || speech.model !== next.model
       || speech.fellBackToCPU !== next.fellBackToCPU
+      || speech.fellBackToSmallerModel !== next.fellBackToSmallerModel
       || speech.lastError !== next.lastError
       || (speech.downloading === null) !== (next.downloading === null);
     speech = next;
@@ -173,6 +180,7 @@ async function boot(): Promise<void> {
 
   const fromHash = window.location.hash.replace('#', '');
   await go(SECTIONS.some((section) => section.id === fromHash) ? fromHash : 'insights');
+  await maybeShowOnboarding((section) => { void go(section); });
 }
 
 void boot();

@@ -1,14 +1,14 @@
 {
-  "name": "quill-desktop",
+  "name": "quill-windows",
   "productName": "Quill",
-  "version": "1.0.0",
-  "description": "Hold a key, speak, let go \u2014 the words land where your caret already is. Windows, Linux and macOS.",
+  "version": "1.3.2",
+  "description": "Quill for Windows — hold a key, speak, let go; the words land where your caret already is. Whisper large-v3-turbo on your GPU, optional NVIDIA NIM llama-3.1-8b cleanup.",
   "license": "MIT",
   "author": {
     "name": "Roman Gigliotti",
     "email": "romangigliotti123@gmail.com"
   },
-  "homepage": "https://github.com/romangigliotti123-arch/quill",
+  "homepage": "https://github.com/romangigliotti123-arch/quill-windows",
   "main": "dist/main/main.js",
   "type": "commonjs",
   "scripts": {
@@ -25,7 +25,8 @@
     "dist:win": "npm run build && npm run icon && electron-builder --win",
     "dist:linux": "npm run build && npm run icon && electron-builder --linux",
     "dist:mac": "npm run build && npm run icon && electron-builder --mac",
-    "icon": "node scripts/make_icon.mjs"
+    "icon": "node scripts/make_icon.mjs",
+    "check:speech": "npm run build && node scripts/check_speech.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0"
@@ -39,5 +40,12 @@
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/romangigliotti123-arch/quill-windows.git"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

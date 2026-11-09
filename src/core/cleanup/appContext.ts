@@ -1,6 +1,7 @@
 import type { NumberStyle } from '../settings';
 import { applyNumberStyle } from './numberStyle';
 import { isLetter, isUppercase, trimPunctuation } from '../text/strings';
+import { looksLikeCommand } from './spokenCommand';
 
 /// What kind of place the text is about to land in.
 ///
@@ -88,10 +89,34 @@ export function appContextOf(processOrClass: string | null | undefined): AppCont
 /// day came out lower-cased — "one thing I want you to do is…", four in a row.
 /// The rule was right about code and wrong about the place it is actually used.
 ///
-/// A terminal still gets none, because that is where suppression earns its
-/// place: `Git status` is not a command.
+/// A terminal still gets none *for a command*, because that is where
+/// suppression earns its place: `Git status` is not a command, and the capital
+/// has to be deleted by hand every single time.
+///
+/// But only for a command. The same evidence that reversed this for `code`
+/// applies here and is stronger: of 85 real dictations in Roman's history,
+/// **85 were prose and 0 were shell commands**, and Ghostty was the most
+/// common destination in his recent history — because that is where Claude
+/// Code lives. Thirty of those 85 lost their opening capital to this rule.
+///
+/// `capitalisesSentencesFor` is the one to call. This function answers for a
+/// context with no utterance in hand, which after that finding means answering
+/// as though a terminal were always a shell — kept only for callers that
+/// genuinely have no text, and there are none on the dictation path.
 export function capitalisesSentences(context: AppContext): boolean {
   return context === 'code' || context === 'prose';
+}
+
+/// Whether *this* utterance should be given a capital.
+///
+/// A terminal asks the words rather than the window. See `spokenCommand.ts`.
+export function capitalisesSentencesFor(context: AppContext, text: string): boolean {
+  switch (context) {
+    case 'terminal': return !looksLikeCommand(text);
+    case 'query': return false;
+    case 'code':
+    case 'prose': return true;
+  }
 }
 
 /// Whether a trailing full stop is welcome.
@@ -102,6 +127,19 @@ export function capitalisesSentences(context: AppContext): boolean {
 /// able to say why.
 export function keepsTrailingFullStop(context: AppContext): boolean {
   return context === 'code' || context === 'prose';
+}
+
+/// Whether *this* utterance should keep its full stop.
+///
+/// `npm run build.` is not a command; "That should do it." is a sentence. The
+/// window cannot tell them apart and the words can.
+export function keepsTrailingFullStopFor(context: AppContext, text: string): boolean {
+  switch (context) {
+    case 'terminal': return !looksLikeCommand(text);
+    case 'query': return false;
+    case 'code':
+    case 'prose': return true;
+  }
 }
 
 /// Whether a spoken number should be restyled for this destination.
@@ -148,13 +186,13 @@ export function applyAppContext(
 ): string {
   let out = text;
   if (stylesNumbers(context)) out = applyNumberStyle(out, numbers);
-  if (!keepsTrailingFullStop(context)) {
+  if (!keepsTrailingFullStopFor(context, out)) {
     // Only a full stop, and only one, and only at the very end. A question mark
     // is information — "did the build pass?" means something a full stop does
     // not — and an ellipsis is deliberate.
     if (out.endsWith('.') && !out.endsWith('..')) out = out.slice(0, -1);
   }
-  if (!capitalisesSentences(context)) out = lowercasingFirstLetterIfSafe(out);
+  if (!capitalisesSentencesFor(context, out)) out = lowercasingFirstLetterIfSafe(out);
   return out;
 }
 

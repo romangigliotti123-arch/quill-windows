@@ -104,13 +104,27 @@ test('the context prompt states the default answer before the exception', () => 
 
 // MARK: - Where the words are going
 
-test('a terminal gets no capital and no full stop', () => {
+test('a terminal gets no capital and no full stop — for a command', () => {
   // `Git status` is not a command, and the full stop has to be deleted by hand
   // every single time — exactly the kind of small tax that makes someone stop
-  // using dictation without ever being able to say why.
-  assert.equal(applyAppContext('Run the build.', 'terminal'), 'run the build');
+  // using dictation without ever being able to say why. This half is unchanged
+  // and has to stay working.
+  assert.equal(applyAppContext('Git status.', 'terminal'), 'git status');
+  assert.equal(applyAppContext('Npm run build.', 'terminal'), 'npm run build');
+  // The context-only answer, for a caller with no utterance in hand.
   assert.equal(capitalisesSentences('terminal'), false);
   assert.equal(keepsTrailingFullStop('terminal'), false);
+});
+
+test('a sentence in a terminal is no longer treated as a command', () => {
+  // This expectation used to be "Run the build." -> "run the build", and it was
+  // wrong about the sentence rather than about the rule. "Run the build." is
+  // not a shell command — the command is `npm run build` — it is a sentence
+  // someone said to Claude Code, which is what a terminal mostly contains now.
+  // Measured on 85 real dictations: 85 prose, 0 commands, 76 opening capitals
+  // stripped and 71 full stops stripped by the old rule. See spokenCommand.test.ts.
+  assert.equal(applyAppContext('Run the build.', 'terminal'), 'Run the build.');
+  assert.equal(applyAppContext('Can you check that for me?', 'terminal'), 'Can you check that for me?');
 });
 
 test('a code editor keeps its capitals, and that is a reversal', () => {
@@ -123,8 +137,9 @@ test('a code editor keeps its capitals, and that is a reversal', () => {
 
 test('a question mark survives where a full stop does not', () => {
   // "did the build pass?" means something a full stop does not.
-  assert.equal(applyAppContext('Did the build pass?', 'terminal'), 'did the build pass?');
-  assert.equal(applyAppContext('Wait for it...', 'terminal'), 'wait for it...');
+  assert.ok(applyAppContext('did the build pass?', 'terminal').endsWith('?'));
+  assert.ok(applyAppContext('did the build pass?', 'query').endsWith('?'));
+  assert.equal(applyAppContext('wait...', 'terminal'), 'wait...');
 });
 
 test('a name at the start of a command keeps its capital', () => {

@@ -1,0 +1,34 @@
+<meta charset="utf-8">
+<title>Quill</title>
+<link rel="stylesheet" href="./bar.css">
+<body>
+  <!--
+    The always-on bar: a small glass pill at the edge of the screen that widens
+    on hover and starts or stops a dictation with a click. A second, independent
+    window from the HUD — the HUD ignores the mouse on purpose, so a dictation
+    can never lose focus to it, and this one exists to be clicked.
+  -->
+  <div id="stage" data-anchor="left">
+    <div id="pill" class="pill" data-hover="false" data-active="false" data-note="true">
+      <button id="dictate" class="seg first" type="button" aria-label="Dictate">
+        <span class="slot">
+          <svg id="wave" class="icon" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M2 9h0.01M5 5.5v7M8 3v12M11 6v6M14 4.5v9M16.5 9h0.01"
+                  fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          </svg>
+          <i id="dot" class="dot" aria-hidden="true"></i>
+        </span>
+        <span class="label">Dictate</span>
+      </button>
+      <span class="divider" aria-hidden="true"></span>
+      <button id="note" class="seg second" type="button" aria-label="New note">
+        <svg class="icon small" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <span class="label">Note</span>
+      </button>
+    </div>
+  </div>
+  <script src="./bar.js"></script>
+</body>

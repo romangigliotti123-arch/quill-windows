@@ -60,6 +60,10 @@ files:
 #   * `@huggingface/transformers` resolves the runtime files above by path at
 #     run time, so it has to sit on the same side of the boundary as they do.
 asarUnpack:
+  # The MCP server runs as its own process, launched by Claude on Quill's own
+  # executable with ELECTRON_RUN_AS_NODE=1. A process cannot read its entry
+  # script out of an asar, so it is unpacked.
+  - dist/mcp/**
   - node_modules/uiohook-napi/**
   - node_modules/onnxruntime-web/**
   - node_modules/@huggingface/transformers/**

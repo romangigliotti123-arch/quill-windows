@@ -62,16 +62,29 @@ export function ensureDataDirectory(): string {
 /// Deliberately a list and not "delete the directory". On a development machine
 /// the same folder can hold a downloaded speech model, and a feature that
 /// re-downloads 150 MB out from under you is not the feature that was asked for.
+///
+/// Deliberately NOT `style.json` — the learned writing profile. It takes real
+/// time and real dictations to build back up, "Erase everything" and
+/// "Uninstall" are both one click past a confirmation someone can click through
+/// without reading, and losing months of learned voice to either is a worse day
+/// than losing it should ever cost. It has its own button, on the Style screen,
+/// that asks about nothing else — see `StyleStore.reset()`.
 export const DATA_FILES = [
   'history.json',      // every dictation
   'settings.json',     // hotkeys, microphone, preferences
   'vocabulary.json',   // the Dictionary
   'transforms.json',   // saved transforms and their chords
   'snippets.json',
-  'notes.json',        // the Scratchpad
-  'style.json',        // the learned writing profile
+  'notes.json',
+  'my-voice-for-ai.md', // the exported "write like me" document
   'nim-key.txt',       // the API key
+  'account.json',      // the signed-in session, if there is one
+  'device.json',       // this machine's id, for the Devices list on Account
 ] as const;
+
+/// Files the app writes that are deliberately not on `DATA_FILES`. Named in one
+/// place so the source-scan test can tell "forgotten" from "decided".
+export const DELIBERATELY_NOT_ERASED = ['style.json'] as const;
 
 export function dataFiles(): string[] {
   return DATA_FILES.map((name) => dataFile(name));
@@ -89,7 +102,12 @@ export function incidentalFiles(): string[] {
     return [];
   }
   return listed
-    .filter((name) => name.includes('.unreadable-') || name.endsWith('.log') || name === 'caret-probe.txt')
+    .filter((name) => name.includes('.unreadable-') || name.endsWith('.log') || name === 'caret-probe.txt'
+      // The two receipts QUILL_ERASE_NOW / QUILL_ERASE_DRY_RUN leave behind for
+      // a harness to read back. Diagnostic output about an erase, not data an
+      // erase is required to remove on its own — but a stray one left over from
+      // a debug run should still go when everything else does.
+      || name === 'erase-dry-run.txt' || name === 'erased.txt')
     .map((name) => join(directory, name));
 }
 

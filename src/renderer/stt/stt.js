@@ -172,12 +172,37 @@ async function ensurePipeline(options) {
     //
     // `QUILL_DTYPE` overrides it, as a JSON object. That is how the table above
     // was measured and how the next runtime version will be checked.
-    const dtype = JSON.parse(window.quillSTT.dtypeOverride || 'null')
-      ?? { encoder_model: 'fp32', decoder_model_merged: 'q4' };
+    const override = JSON.parse(window.quillSTT.dtypeOverride || 'null');
 
-    const build = async (device) => pipeline('automatic-speech-recognition', options.model, {
+    // The large models are a GPU model and nothing else. Whisper large-v3-turbo
+    // has a ~800M-parameter encoder; the measurements above are for the 74M-
+    // parameter base model, and a CPU that takes 1.4x real time on base is
+    // roughly ten times slower on large — a dictation that finishes a minute
+    // after you let go of the key. So without WebGPU (the GPU switch is off, or
+    // the machine has none) the large models step down to Base rather than
+    // load and be unusable, and the status says so out loud.
+    const isLarge = (model) => /large/i.test(model);
+    const FALLBACK_MODEL = 'onnx-community/whisper-base.en';
+
+    // Per model AND per backend, because the right weights differ:
+    //
+    //   base / small, either backend   encoder fp32, decoder q4 (measured above)
+    //   large-v3-turbo, WebGPU         encoder fp16, decoder q4. This is the
+    //                                  combination the library's own WebGPU
+    //                                  example uses for this exact model: the
+    //                                  encoder is where Whisper's accuracy
+    //                                  lives, so it stays at half precision
+    //                                  (1.27 GB) rather than 4-bit (425 MB),
+    //                                  and the decoder, which is 4x bigger at
+    //                                  fp32 than it needs to be, is q4.
+    const dtypeFor = (model, device) => override
+      ?? (isLarge(model) && device === 'webgpu'
+        ? { encoder_model: 'fp16', decoder_model_merged: 'q4' }
+        : { encoder_model: 'fp32', decoder_model_merged: 'q4' });
+
+    const build = async (model, device) => pipeline('automatic-speech-recognition', model, {
       device,
-      dtype,
+      dtype: dtypeFor(model, device),
       progress_callback: (progress) => {
         if (!progress || typeof progress.progress !== 'number') return;
         send('stt:progress', {
@@ -188,9 +213,17 @@ async function ensurePipeline(options) {
       },
     });
 
+    let model = options.model;
+    let fellBackModel = false;
+    if (wanted === 'wasm' && isLarge(model)) {
+      log(`${model} needs the GPU; using ${FALLBACK_MODEL} on the CPU instead`);
+      model = FALLBACK_MODEL;
+      fellBackModel = true;
+    }
+
     try {
-      state.pipeline = await build(wanted);
-      send('stt:ready', { device: wanted, model: options.model });
+      state.pipeline = await build(model, wanted);
+      send('stt:ready', { device: wanted, model, requestedModel: options.model, fellBackModel });
     } catch (error) {
       if (wanted === 'wasm') throw error;
       // WebGPU is missing on a lot of Linux setups and on older Windows
@@ -199,8 +232,14 @@ async function ensurePipeline(options) {
       // running on the CPU when the user expected the GPU is a five-times
       // latency difference they are entitled to know about.
       log(`WebGPU unavailable, falling back to CPU: ${error}`);
-      state.pipeline = await build('wasm');
-      send('stt:ready', { device: 'wasm', model: options.model, fellBack: true });
+      if (isLarge(model)) {
+        model = FALLBACK_MODEL;
+        fellBackModel = true;
+      }
+      state.pipeline = await build(model, 'wasm');
+      send('stt:ready', {
+        device: 'wasm', model, requestedModel: options.model, fellBack: true, fellBackModel,
+      });
     }
     return state.pipeline;
   })();

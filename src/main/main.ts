@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { BrowserWindow, app, globalShortcut, session } from 'electron';
+import { existsSync, readFileSync } from 'node:fs';
+import { BrowserWindow, app, globalShortcut, net, session } from 'electron';
 import { decodeWav, resample } from '../core/wav';
 import { ensureDataDirectory } from '../core/paths';
 import { QuillSettings } from '../core/settings';
@@ -25,8 +25,14 @@ import { ClipboardSelectionReader } from './transforms/selectionReader';
 import { TransformEngine } from './transforms/transformEngine';
 import { DictationCoordinator } from './dictation/coordinator';
 import { OverlayWindow } from './windows/overlayWindow';
+import { PersistentBar } from './windows/barWindow';
+import { QuickNoteBubble } from './windows/noteBubbleWindow';
 import { DashboardWindow } from './windows/dashboardWindow';
 import { TrayIcon } from './windows/trayIcon';
+import { EditWatcher } from '../core/style/editWatcher';
+import { createFocusedTextReader } from './style/focusedTextReader';
+import { AccountService } from './account/accountService';
+import { safeStorageSealer } from './account/safeStorageSealer';
 import { registerIPC } from './ipc';
 import { MODEL_ORIGIN, installModelProtocol, onModelProgress } from './stt/modelProxy';
 
@@ -61,13 +67,24 @@ ensureDataDirectory();
 
 // Must happen before `app.whenReady`, which is a hard requirement of Electron's
 // scheme registry rather than a style choice.
+//
+// First run is "settings.json does not exist", decided BEFORE anything below can
+// create it. An erase brings setup back with no extra flag to fall out of sync.
+const isFirstRun = !existsSync(QuillSettings.defaultURL());
 const settings = new QuillSettings();
+// Recorded only on a machine that has run Quill before: writing the file here on
+// a first launch would make first run look finished before onboarding has been
+// seen. Finishing onboarding records it instead.
+const previousVersion = isFirstRun ? null : settings.noteLaunch(app.getVersion());
 const overlay = new OverlayWindow();
 const dashboard = new DashboardWindow();
 const tray = new TrayIcon();
 const windows = new WindowWatcher();
 
 let coordinator: DictationCoordinator | null = null;
+let bar: PersistentBar | null = null;
+let bubble: QuickNoteBubble | null = null;
+let accountService: AccountService | null = null;
 let registerShortcuts: () => void = () => {};
 
 app.on('second-instance', () => dashboard.show());
@@ -161,6 +178,24 @@ app.whenReady().then(() => {
     lastDictation: () => coordinator?.lastInsertion ?? null,
   });
 
+  // After a dictation lands, watch the sentence Quill inserted and learn from
+  // what the user changes about it. Only that span is ever read, and only while
+  // "Learn from what you change" is on.
+  const frontmostPID = (): number | null => {
+    const identity = windows.active?.identity;
+    const pid = identity === undefined ? NaN : Number(identity);
+    return Number.isFinite(pid) ? pid : null;
+  };
+  const editWatcher = new EditWatcher({
+    reader: createFocusedTextReader(),
+    store: stores.style,
+    learnFromEdits: () => settings.learnFromEdits,
+    frontmostPID,
+    // The Style screen rebuilds on this, so a correction shows up without the
+    // tab being reopened.
+    onConcluded: () => dashboard.send('quill:style-learned', null),
+  });
+
   coordinator = new DictationCoordinator({
     hotkey,
     transcriber: speech,
@@ -174,12 +209,68 @@ app.whenReady().then(() => {
     undo,
     windows,
     transforms: { router: new CommandRouter(), engine },
+    onInserted: ({ text, process }) => {
+      const pid = frontmostPID();
+      if (pid !== null) editWatcher.begin(text, pid, process);
+    },
+  });
+
+  // A key added in Settings, or one that arrived through sync, takes effect
+  // immediately instead of at the next launch.
+  const keyChanged = (): void => {
+    nim.refreshKey();
+    engine.setCompleter(nim.isConfigured ? nim : null);
+  };
+
+  // The optional account and its sync. Constructing it makes no request: nothing
+  // leaves the machine on this feature's behalf until somebody signs in.
+  const accounts = new AccountService({
+    sealer: safeStorageSealer,
+    // Electron's own network stack, so sign-in honours Windows proxy settings.
+    fetch: (url, init) => net.fetch(url as string, init as RequestInit),
+    // Sync rewrote one of the six files underneath the running app. Every store
+    // keeps its records in memory and writes the whole file on its next change,
+    // so each is reloaded or it would put its stale copy back over the merge.
+    onMerged: (field) => {
+      switch (field) {
+        case 'history': stores.history.reloadFromDisk(); break;
+        case 'snippets': stores.snippets.reloadFromDisk(); break;
+        case 'transforms': stores.transforms.reloadFromDisk(); break;
+        case 'style': stores.style.reloadFromDisk(); break;
+        case 'aiKey': keyChanged(); break;
+        case 'vocabulary': break; // the Dictionary re-reads on its own when the file moves
+      }
+      dashboard.send('quill:synced', field);
+    },
   });
 
   coordinator.onActivity = (activity) => {
     dashboard.send('quill:activity', activity);
     tray.rebuild(trayActions);
   };
+
+  // The always-on bar and the quick-note bubble that hangs off it. Both start
+  // and stop a dictation through the coordinator the held key uses, so a click
+  // is a normal dictation rather than a parallel implementation of one.
+  const noteBubble = new QuickNoteBubble(stores.notes);
+  const persistentBar = new PersistentBar({
+    settings,
+    onToggle: () => coordinator?.toggleHandsFree(),
+    onNewNote: () => {
+      void noteBubble.begin(persistentBar.pillBounds, () => coordinator?.toggleHandsFree());
+    },
+  });
+  bubble = noteBubble;
+  bar = persistentBar;
+  coordinator.onDictatingChanged = (dictating) => {
+    persistentBar.setActive(dictating);
+    // Whatever was being watched is no longer the sentence being edited, and the
+    // live typer is about to make its own accessibility calls against the same
+    // app on every partial. One at a time.
+    if (dictating) editWatcher.cancel();
+  };
+  coordinator.onSettled = () => noteBubble.finish();
+  void persistentBar.apply();
 
   const trayActions = {
     toggleDashboard: () => dashboard.toggle(),
@@ -208,7 +299,13 @@ app.whenReady().then(() => {
     nimStatus: () => nim.status(),
     onSettingsChanged: () => { registerShortcuts(); applyLoginItem(); },
     relaunch: () => { app.relaunch(); quitting = true; app.exit(0); },
+    quit: () => { quitting = true; app.quit(); },
+    firstRun: isFirstRun,
+    accountHandlers: accounts.handlers,
+    onKeyChanged: keyChanged,
   });
+  accountService = accounts;
+  accounts.start();
 
   /// The shortcuts that are registered globally rather than watched.
   ///
@@ -330,7 +427,7 @@ app.whenReady().then(() => {
     setTimeout(() => {
       void dashboard.capture(captureTo, [
         'insights', 'dictation', 'dictionary', 'snippets', 'style',
-        'transforms', 'notetaker', 'scratchpad', 'settings', 'help',
+        'transforms', 'notes', 'mcp', 'account', 'settings', 'help',
       ]).then(() => { quitting = true; app.exit(0); });
     }, 2_500);
   }
@@ -392,4 +489,7 @@ app.on('will-quit', () => {
   windows.stop();
   tray.dispose();
   overlay.dispose();
+  bar?.dispose();
+  bubble?.dispose();
+  accountService?.stop();
 });

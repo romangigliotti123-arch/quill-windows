@@ -17,6 +17,10 @@ export interface WireRecord {
   insertedText: string;
   wordCount: number;
   inputDevice: string | null;
+  /// The app the text landed in — a process name on Windows.
+  destinationBundleID?: string | null;
+  /// What the user changed it to, when they used Correct.
+  correctedText?: string | null;
   timings: {
     timeToFirstWordMs: number | null;
     finalToInsertedMs: number | null;
@@ -46,8 +50,7 @@ export interface WireNote {
   title: string;
   body: string;
   created: number;
-  modified: number;
-  isPinned: boolean;
+  updated: number;
 }
 
 export interface WireTransform {
@@ -124,6 +127,8 @@ export const api = {
   history: {
     list: () => call<WireRecord[]>('history.list'),
     insights: (range: InsightsRange) => call<InsightsMetrics>('history.insights', { range }),
+    correct: (id: string, text: string) =>
+      call<{ was: string; now: string; dictionaryCandidates: string[] } | null>('history.correct', { id, text }),
   },
 
   vocabulary: {
@@ -151,6 +156,8 @@ export const api = {
     setLearning: (enabled: boolean) => call<boolean>('style.setLearning', enabled),
     removePhrasing: (id: string) => call<boolean>('style.removePhrasing', id),
     forget: () => call<boolean>('style.forget'),
+    reset: () => call<boolean>('style.reset'),
+    export: () => call<{ path: string; text: string } | null>('style.export'),
   },
 
   transforms: {
@@ -170,6 +177,10 @@ export const api = {
     diagnostics: () => call<DiagnosticsReport>('app.diagnostics'),
     dataSummary: () => call<{ name: string; bytes: number }[]>('app.dataSummary'),
     eraseEverything: () => call<string[]>('app.eraseEverything'),
+    version: () => call<string>('app.version'),
+    isFirstRun: () => call<boolean>('app.isFirstRun'),
+    completeOnboarding: () => call<boolean>('app.completeOnboarding'),
+    uninstall: () => call<{ ok: boolean; reason?: string }>('app.uninstall'),
     openDataDirectory: () => call<boolean>('app.openDataDirectory'),
     openExternal: (url: string) => call<boolean>('app.openExternal', url),
     toggleDictation: () => call<boolean>('app.toggleDictation'),

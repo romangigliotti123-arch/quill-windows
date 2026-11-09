@@ -36,11 +36,15 @@ const PATHS: Record<string, string> = {
   // A wand with a spark.
   transforms: `<path ${STROKE} d="M4 18 14.5 7.5"/><path ${STROKE} d="M13 6 16 9"/>`
     + `<path ${STROKE} d="M17 3v3M15.5 4.5h3M19 12v2M18 13h2"/>`,
-  // A record button.
-  notetaker: `<circle ${STROKE} cx="11" cy="11" r="8"/><circle cx="11" cy="11" r="3.4" fill="currentColor"/>`,
   // A page with a pencil.
-  scratchpad: `<path ${STROKE} d="M16 11.5V18a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 18V6a1.5 1.5 0 0 1 1.5-1.5H11"/>`
+  notes: `<path ${STROKE} d="M16 11.5V18a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 18V6a1.5 1.5 0 0 1 1.5-1.5H11"/>`
     + `<path ${STROKE} d="m13.5 3.5 3 3-6 6H7.5V9.5Z"/>`,
+  // Three linked nodes: a server other things connect to.
+  mcp: `<circle ${STROKE} cx="5" cy="6" r="2"/><circle ${STROKE} cx="17" cy="6" r="2"/>`
+    + `<circle ${STROKE} cx="11" cy="17" r="2"/><path ${STROKE} d="M7 6h8M6 8l4 7M16 8l-4 7"/>`,
+  // A person in a circle.
+  account: `<circle ${STROKE} cx="11" cy="11" r="8"/><circle ${STROKE} cx="11" cy="9" r="2.6"/>`
+    + `<path ${STROKE} d="M5.8 17.2c1.2-2.2 3.1-3.2 5.2-3.2s4 1 5.2 3.2"/>`,
   // A gear, six teeth, drawn rather than a circle with bumps.
   settings: `<circle ${STROKE} cx="11" cy="11" r="3"/>`
     + `<path ${STROKE} d="M11 2.6v2.1M11 17.3v2.1M17.9 6.9l-1.8 1M5.9 13.1l-1.8 1M17.9 15.1l-1.8-1M5.9 8.9l-1.8-1"/>`,

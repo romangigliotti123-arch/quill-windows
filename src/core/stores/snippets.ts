@@ -123,6 +123,35 @@ export function snippetSeed(): Snippet[] {
   return [];
 }
 
+/// Three snippets that show the three shapes one can take — a block of prose, a
+/// single line, and a template with gaps to fill.
+///
+/// Its own list rather than the seed, and the separation is the point — the same
+/// argument as the vocabulary fixture. A renderer needs rows on screen to prove
+/// the layout holds; a new user needs nothing at all. Tying the two together is
+/// what made "ship no starter snippets" look like "the section no longer
+/// draws".
+export function snippetDemonstration(): Snippet[] {
+  const now = new Date();
+  return [
+    makeSnippet({
+      phrase: 'my email', replacement: 'you@example.com',
+      useCount: 12, lastUsed: now, created: now,
+    }),
+    makeSnippet({
+      phrase: 'sign off', replacement: 'Thanks,\nYour name',
+      useCount: 31, lastUsed: now, created: now,
+    }),
+    // `alone` because "standup" is one ordinary word: matched anywhere in a
+    // sentence it would fire on someone saying "the standup is at nine" and eat
+    // their words. The trigger test catches exactly this, and caught it here.
+    makeSnippet({
+      phrase: 'standup', replacement: 'Yesterday:\nToday:\nBlocked on:',
+      mode: 'alone', useCount: 4, lastUsed: now, created: now,
+    }),
+  ];
+}
+
 /// Snippets on disk, plus the usage counters.
 export class SnippetStore {
   private readonly url: string | null;
@@ -143,6 +172,9 @@ export class SnippetStore {
     return store;
   }
 
+  /// A store for the screenshot renderer and for previews — never a file.
+  static preview(): SnippetStore { return SnippetStore.inMemory(snippetDemonstration()); }
+
   constructor(url: string | null = dataFile('snippets.json')) {
     this.url = url;
     if (!url) return;
@@ -162,6 +194,14 @@ export class SnippetStore {
         this.loadFailed = true;
         break;
     }
+  }
+
+  /// See `HistoryStore.reloadFromDisk`: a sync rewrote the file, and the copy in
+  /// memory must not be written back over it.
+  reloadFromDisk(): void {
+    if (!this.url) return;
+    const outcome = readStoreFile(this.url, validate);
+    if (outcome.kind === 'decoded') this.items = outcome.value;
   }
 
   get all(): Snippet[] { return this.items.map((snippet) => ({ ...snippet })); }

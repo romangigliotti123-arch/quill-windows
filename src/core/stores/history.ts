@@ -1,6 +1,7 @@
 import { dataFile, expandTilde, writeAtomic } from '../paths';
 import { encodeJSON, fromISO, readStoreFile, toISO, uuid } from './storeFile';
 import { QuillSettings, retentionCutoff } from '../settings';
+import { wordCount as countWords, trim } from '../text/strings';
 
 /// Every dictation, on disk, with its timings.
 ///
@@ -40,6 +41,29 @@ export interface DictationRecord {
   /// audited, and a word-error-rate from an app that never heard the test audio
   /// looks exactly like a real one.
   inputDevice: string | null;
+  /// Where the text was inserted. On macOS this is the destination's bundle
+  /// identifier ("com.apple.TextEdit"); here it is whatever the window watcher
+  /// reports — the executable name on Windows, the window class on X11, the
+  /// app id on Wayland. The key keeps its macOS name so a history file written
+  /// on either platform reads on the other, and so sync never has to translate.
+  ///
+  /// Null for a record written before this existed, and for the paths where the
+  /// text never landed anywhere.
+  ///
+  /// Recorded whether or not the app will let Quill read the field back:
+  /// knowing where your words went does not depend on being able to re-read
+  /// them, and Insights and the Style screen both want it.
+  destinationBundleID?: string | null;
+  /// What the user changed the text to, after the fact, from the Dictation
+  /// screen. Null when they never touched it, which is almost always.
+  ///
+  /// Kept alongside `insertedText` rather than replacing it. The pair is the
+  /// evidence — what Quill produced and what the user actually wanted — and
+  /// overwriting the first would throw away the only record of what needed
+  /// correcting. It is also what `rawText` / `insertedText` on the Dictation
+  /// screen are drawn from, and a diff against an edited version is a diff
+  /// against the wrong thing.
+  correctedText?: string | null;
   timings: DictationTimings;
 }
 
@@ -72,22 +96,44 @@ export function isMeasurement(record: DictationRecord): boolean {
   return isLoopbackDevice(record.inputDevice);
 }
 
+/// Decoded key by key, with a default for anything absent.
+///
+/// A strict decoder throws on a missing key, and these records are read as one
+/// array — so a single field added in a future release makes every record
+/// written before it undecodable, `readStoreFile` correctly refuses to
+/// overwrite the file, and the user opens Quill after an update to an empty
+/// history and a store that has stopped saving. The data is still on disk, which
+/// is no comfort to someone looking at a blank screen.
+///
+/// `rawText` and `insertedText` stay required. They are the record — a history
+/// entry without them is not a dictation that lost a field, it is corruption,
+/// and quietly inventing an empty one hides that.
 function validate(value: unknown): DictationRecord[] | null {
   if (!Array.isArray(value)) return null;
   const out: DictationRecord[] = [];
   for (const raw of value as Record<string, unknown>[]) {
-    if (!raw || typeof raw !== 'object') return null;
-    const date = fromISO(raw.date);
-    if (!date) return null;
-    const timings = (raw.timings ?? {}) as Record<string, unknown>;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (typeof raw.rawText !== 'string' || typeof raw.insertedText !== 'string') return null;
+    // Absent is a default. Present and not a date is damage.
+    let date: Date;
+    if (raw.date === undefined || raw.date === null) {
+      date = new Date();
+    } else {
+      const parsed = fromISO(raw.date);
+      if (!parsed) return null;
+      date = parsed;
+    }
+    const timings = (raw.timings && typeof raw.timings === 'object' ? raw.timings : {}) as Record<string, unknown>;
     const number = (key: string): number | null =>
       (typeof timings[key] === 'number' ? (timings[key] as number) : null);
-    out.push({
+    const record: DictationRecord = {
       id: typeof raw.id === 'string' ? raw.id : uuid(),
       date,
-      rawText: typeof raw.rawText === 'string' ? raw.rawText : '',
-      insertedText: typeof raw.insertedText === 'string' ? raw.insertedText : '',
-      wordCount: typeof raw.wordCount === 'number' ? raw.wordCount : 0,
+      rawText: raw.rawText,
+      insertedText: raw.insertedText,
+      // Derived rather than defaulted to zero, so Insights does not report a
+      // month of dictation as no words at all.
+      wordCount: typeof raw.wordCount === 'number' ? raw.wordCount : countWords(raw.insertedText),
       inputDevice: typeof raw.inputDevice === 'string' ? raw.inputDevice : null,
       timings: {
         timeToFirstWordMs: number('timeToFirstWordMs'),
@@ -100,21 +146,31 @@ function validate(value: unknown): DictationRecord[] | null {
         speechOnsetMs: number('speechOnsetMs'),
         recogniserFirstWordMs: number('recogniserFirstWordMs'),
       },
-    });
+    };
+    if (typeof raw.destinationBundleID === 'string') record.destinationBundleID = raw.destinationBundleID;
+    if (typeof raw.correctedText === 'string') record.correctedText = raw.correctedText;
+    out.push(record);
   }
   return out;
 }
 
 function encode(records: DictationRecord[]): unknown {
-  return records.map((record) => ({
-    id: record.id,
-    date: toISO(record.date),
-    rawText: record.rawText,
-    insertedText: record.insertedText,
-    wordCount: record.wordCount,
-    inputDevice: record.inputDevice,
-    timings: record.timings,
-  }));
+  return records.map((record) => {
+    const encoded: Record<string, unknown> = {
+      id: record.id,
+      date: toISO(record.date),
+      rawText: record.rawText,
+      insertedText: record.insertedText,
+      wordCount: record.wordCount,
+      inputDevice: record.inputDevice,
+      timings: record.timings,
+    };
+    // Omitted when absent, as the macOS encoder omits a nil optional, so a
+    // record that never had these round-trips byte for byte.
+    if (record.destinationBundleID != null) encoded.destinationBundleID = record.destinationBundleID;
+    if (record.correctedText != null) encoded.correctedText = record.correctedText;
+    return encoded;
+  });
 }
 
 export function historyURL(): string {
@@ -171,6 +227,19 @@ export class HistoryStore {
     this.startExpiryTimer();
   }
 
+  /// Re-reads the file after a sync rewrote it underneath this store. Only a
+  /// file that decodes replaces what is in memory — a store holds its records in
+  /// memory and writes the whole file on the next change, so without this a
+  /// running Quill would put its stale copy back over the merge within one
+  /// dictation.
+  reloadFromDisk(): void {
+    if (!this.url) return;
+    const outcome = readStoreFile(this.url, validate);
+    if (outcome.kind !== 'decoded') return;
+    this.records = outcome.value;
+    this.prune();
+  }
+
   /// Hourly, because "a month old" becomes true while the app is sitting there
   /// and the record should go that day rather than at the next restart.
   ///
@@ -204,6 +273,28 @@ export class HistoryStore {
       // eslint-disable-next-line no-console
       console.log(`[quill] history: deleted ${removed} expired dictation(s)`);
     }
+  }
+
+  /// Record what the user meant, from the Dictation screen.
+  ///
+  /// **This is the learning path that works everywhere.** `EditWatcher` reads
+  /// the sentence back out of the app it landed in, which only some apps allow.
+  /// Correcting a dictation here costs one click, works for every dictation
+  /// whatever app it went to, and Quill owns both sides of the pair so there is
+  /// nothing to infer.
+  ///
+  /// Returns the pair to learn from, or null when nothing changed.
+  correct(id: string, text: string): { was: string; now: string } | null {
+    if (this.loadFailed) return null;
+    const index = this.records.findIndex((record) => record.id === id);
+    if (index < 0) return null;
+    const existing = this.records[index]!;
+    const previous = existing.correctedText ?? existing.insertedText;
+    const cleaned = trim(text);
+    if (cleaned.length === 0 || cleaned === previous) return null;
+    this.records[index] = { ...existing, correctedText: cleaned };
+    this.persist();
+    return { was: previous, now: cleaned };
   }
 
   /// Delete anything past its date. Safe to call as often as you like — it

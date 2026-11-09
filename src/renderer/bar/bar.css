@@ -1,0 +1,160 @@
+/*
+  The always-on bar. Same family as the HUD: a translucent material, one tint
+  over it, one hairline, and the same teal accent in both themes. Deliberately
+  simpler than the HUD — that one is on screen for the whole life of every
+  dictation and was tuned frame by frame; this one is idle almost all the time
+  and has two states, not five.
+
+  Metrics are the macOS build's, value for value (36 high, 36 collapsed, 132
+  hovered, a 92-wide second segment). The window is 32px bigger than the widest
+  the pill ever gets, so the shadow has somewhere to fall and the pill can grow
+  without the window resizing.
+*/
+
+:root {
+  --height: 36px;
+  --collapsed: 36px;
+  --expanded: 132px;
+  --second: 92px;
+
+  --material: rgba(246, 247, 249, 0.90);
+  --tint-top: rgba(255, 255, 255, 0.72);
+  --tint-bottom: rgba(77, 84, 102, 0.09);
+  --hairline: rgba(0, 0, 0, 0.12);
+  --primary: rgba(18, 18, 20, 0.94);
+  --accent: #3b6d6e;
+  --record: #d1453b;
+  --shadow: 0 6px 18px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --material: rgba(24, 26, 30, 0.90);
+    --tint-top: rgba(255, 255, 255, 0.14);
+    --tint-bottom: rgba(0, 0, 0, 0.14);
+    --hairline: rgba(255, 255, 255, 0.10);
+    --primary: rgba(255, 255, 255, 0.95);
+    --accent: #6fb3a8;
+    --record: #ff6b5e;
+    --shadow: 0 8px 22px rgba(0, 0, 0, 0.5), 0 1px 5px rgba(0, 0, 0, 0.36);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#stage {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+#stage[data-anchor="left"] { justify-content: flex-start; }
+#stage[data-anchor="center"] { justify-content: center; }
+#stage[data-anchor="right"] { justify-content: flex-end; }
+
+.pill {
+  height: var(--height);
+  width: var(--collapsed);
+  border-radius: calc(var(--height) / 2);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  color: var(--primary);
+  background: linear-gradient(var(--tint-top), var(--tint-bottom)), var(--material);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--hairline);
+  /* A spring-ish ease: quick off the mark, a hair of overshoot, settles. */
+  transition: width 260ms cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+.pill[data-hover="true"] { width: var(--expanded); }
+.pill[data-hover="true"][data-note="true"] { width: calc(var(--expanded) + var(--second)); }
+/* While a dictation is running the bar is a live indicator, not a menu — it
+   collapses to the dot even under the pointer. Listed after the hover rules and
+   as specific as the widest of them, so it wins. */
+.pill[data-active="true"],
+.pill[data-active="true"][data-hover="true"],
+.pill[data-active="true"][data-hover="true"][data-note="true"] { width: var(--collapsed); }
+
+.seg {
+  all: unset;
+  box-sizing: border-box;
+  height: var(--height);
+  display: flex;
+  align-items: center;
+  flex: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.seg.first { width: var(--expanded); }
+.seg.second { width: var(--second); padding-left: 10px; gap: 4px; }
+.seg:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 18px; }
+
+.slot {
+  position: relative;
+  width: var(--height);
+  height: var(--height);
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.icon { width: 18px; height: 18px; display: block; }
+.icon.small { width: 15px; height: 15px; }
+
+.label {
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.pill[data-hover="true"]:not([data-active="true"]) .label { opacity: 1; }
+
+.divider {
+  width: 1px;
+  height: calc(var(--height) - 16px);
+  background: var(--hairline);
+  flex: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.pill[data-hover="true"][data-note="true"]:not([data-active="true"]) .divider { opacity: 1; }
+.pill[data-active="true"] .second { opacity: 0; pointer-events: none; transition: opacity 140ms ease; }
+.pill[data-note="false"] .divider,
+.pill[data-note="false"] .second { display: none; }
+
+/* The live-mic dot replaces the waveform glyph while a dictation is running. */
+.dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--record);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.pill[data-active="true"] .dot {
+  opacity: 1;
+  transform: scale(1);
+  animation: pulse 1.15s ease-in-out infinite;
+}
+.pill[data-active="true"] #wave { opacity: 0; }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--record) 55%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--record) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill, .label, .divider, .dot { transition: none; }
+  .pill[data-active="true"] .dot { animation: none; }
+}

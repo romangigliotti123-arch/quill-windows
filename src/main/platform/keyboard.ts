@@ -87,6 +87,7 @@ export interface Scancodes {
   a: number;
   z: number;
   backspace: number;
+  enter: number;
   escape: number;
   left: number;
   right: number;
@@ -108,6 +109,7 @@ export function codes(): Scancodes {
     a: key.A ?? 30,
     z: key.Z ?? 44,
     backspace: key.Backspace ?? 14,
+    enter: key.Enter ?? 28,
     escape: key.Escape ?? 1,
     left: key.ArrowLeft ?? 57419,
     right: key.ArrowRight ?? 57421,
@@ -187,6 +189,12 @@ export function postChord(key: number, modifiers: number[] = []): boolean {
 /// The paste chord for this platform.
 export function postPaste(): boolean {
   return postChord(codes().v, [primaryModifier()]);
+}
+
+/// Return. Used by the "finish, then Enter" gesture — see
+/// `DictationCoordinator.hotkeyAborted`.
+export function postReturn(): boolean {
+  return postChord(codes().enter, []);
 }
 
 export function postCopy(): boolean {

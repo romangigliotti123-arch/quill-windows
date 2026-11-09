@@ -1,6 +1,7 @@
 import { escapeRegExp, escapeReplacement, isLetter, isLowercase, isNumber, isWhitespace, trim } from '../text/strings';
 import { CORRECTIONS } from './corrections';
 import { formatSpokenEmails } from './spokenEmail';
+import { collapseRepeatedWords } from './repeatedWords';
 import { VocabularyCorrector } from './vocabularyCorrector';
 import { VocabularyBook } from '../stores/vocabulary';
 
@@ -52,6 +53,9 @@ export class FastCleaner implements TranscriptCleaning {
     // cheaply, this catches the ones where the recogniser split a word.
     text = this.vocabulary.correct(text);
     text = stripStandaloneDisfluencies(text);
+    // After the filled pauses, so "the thing is um the thing is" has already
+    // lost its "um" and reads as the adjacent repeat it is.
+    text = collapseRepeatedWords(text);
     text = collapseWhitespace(text);
     text = tightenPunctuationSpacing(text);
     // After the spacing rules, so a domain the recogniser dotted correctly has

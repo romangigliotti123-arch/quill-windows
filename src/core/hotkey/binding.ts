@@ -149,3 +149,41 @@ export const MODIFIER_CODES = new Set<number>([
 export function isModifierCode(code: number): boolean {
   return MODIFIER_CODES.has(code);
 }
+
+/// The Windows key / Command / Super, on either side.
+export function isMetaCode(code: number): boolean {
+  return code === CODES.MetaLeft || code === CODES.MetaRight;
+}
+
+/// What the keys currently held say about the hold trigger just pressed.
+///
+/// `isolated` is whether the gesture machine may treat it as a dictation key
+/// press: no other modifier is down — OR the only other modifier is the Meta
+/// key, which is the transform gesture. `includesMeta` says which of those two
+/// it was.
+///
+/// The transform gesture is the hold trigger plus Meta, and nothing else. Kept
+/// as a second accepted shape of the SAME trigger rather than a separate
+/// binding, so it works whichever key is assigned to hold — and skipped when
+/// hold itself IS Meta, where "plus Meta" would mean nothing. Plain-key
+/// dictation was running transforms on real words that happened to match a
+/// trigger phrase, so the phrase-recognising half of dictation now needs this
+/// second modifier and ordinary dictation does not. On the Mac that modifier is
+/// ⌘; here it is the Windows key (Super on Linux).
+export function classifyTrigger(
+  down: ReadonlySet<number>,
+  holdCode: number,
+): { isolated: boolean; includesMeta: boolean } {
+  let otherModifier = false;
+  let otherNonMeta = false;
+  let meta = false;
+  for (const code of down) {
+    if (code === holdCode || !isModifierCode(code)) continue;
+    otherModifier = true;
+    if (isMetaCode(code)) meta = true;
+    else otherNonMeta = true;
+  }
+  if (!otherModifier) return { isolated: true, includesMeta: false };
+  const transformGesture = !isMetaCode(holdCode) && meta && !otherNonMeta;
+  return { isolated: transformGesture, includesMeta: transformGesture };
+}

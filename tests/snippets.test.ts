@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { expandSnippets } from '../src/core/cleanup/snippetExpander';
-import { SnippetStore, makeSnippet, snippetSeed, type Snippet } from '../src/core/stores/snippets';
+import { expandSnippets, snippetWords } from '../src/core/cleanup/snippetExpander';
+import {
+  SnippetStore, makeSnippet, snippetDemonstration, snippetSeed, type Snippet,
+} from '../src/core/stores/snippets';
 
 // Matching is EXACT, and that is the whole design. The vocabulary corrector
 // next door matches fuzzily on purpose — the worst case there is one wrong
@@ -167,4 +169,30 @@ test('nothing personal can ever be shipped in the seed', () => {
       assert.equal(snippet.mode, 'alone', `"${snippet.phrase}" can fire mid-sentence`);
     }
   }
+});
+
+// MARK: - The demonstration list
+
+test('demonstration snippets are usable rather than filler', () => {
+  // Retargeted from the seed to the preview list when the seed became empty. The
+  // check is about risky triggers, and the risk moved with the data: a phrase
+  // that is one ordinary word will fire in the middle of normal speech unless it
+  // is `alone`.
+  const demonstration = snippetDemonstration();
+  assert.ok(demonstration.length > 0);
+  for (const snippet of demonstration) {
+    assert.ok(snippet.phrase.length > 0);
+    assert.ok(snippet.replacement.length > 0);
+    assert.ok(snippetWords(snippet.phrase).length >= 2 || snippet.mode === 'alone',
+      `risky trigger: ${snippet.phrase}`);
+  }
+  assert.equal(demonstration.length, new Set(demonstration.map((snippet) => snippet.phrase.toLowerCase())).size);
+});
+
+test('the preview store is the demonstration list and never a file', () => {
+  const store = SnippetStore.preview();
+  assert.equal(store.all.length, snippetDemonstration().length);
+  store.upsert(makeSnippet({ phrase: 'x', replacement: 'y' }));
+  assert.equal(SnippetStore.preview().all.length, snippetDemonstration().length,
+    'a change to a preview store reached the next one');
 });

@@ -64,7 +64,9 @@ function checks(report: DiagnosticsReport): HTMLElement {
     report.speech.ready,
     report.speech.ready
       ? `${report.speech.model} on the ${report.speech.device === 'webgpu' ? 'GPU' : 'CPU'}.`
-        + (report.speech.fellBackToCPU ? ' You asked for the GPU and this machine could not provide it.' : '')
+        + (report.speech.fellBackToSmallerModel
+          ? ' Large v3 turbo needs a GPU and this machine has none, so Base was loaded instead.'
+          : report.speech.fellBackToCPU ? ' You asked for the GPU and this machine could not provide it.' : '')
       : (report.speech.lastError
         ?? 'Not loaded yet. It downloads once, the first time you dictate, and then runs offline.'),
     null,

@@ -18,6 +18,8 @@ import type { WindowWatcher } from '../platform/windowWatcher';
 import type { CommandRouter } from '../../core/transforms/commandRouter';
 import type { TransformEngine } from '../transforms/transformEngine';
 import { TransformStore } from '../../core/transforms/transforms';
+import { FinishThenEnter } from '../../core/dictation/finishThenEnter';
+import { postReturn } from '../platform/keyboard';
 
 /// One dictation, start to finish: key down, listen, transcribe, clean, insert.
 ///
@@ -48,6 +50,15 @@ export interface CoordinatorOptions {
   /// them. A test whose result depends on where the mouse was last clicked is
   /// not a test.
   context?: () => AppContext;
+  /// Posts the Return keystroke for "finish, then Enter" — injectable for the
+  /// same reason `context` is: a test that actually posted a real Return to
+  /// whatever app the test machine happens to have focused would be a bug
+  /// pretending to be a feature.
+  sendReturn?: () => void;
+  /// Told once, the moment a dictation's text is on screen and believed to be
+  /// in the app that was focused. The style learner hangs off this: it watches
+  /// the sentence from here on.
+  onInserted?: (info: { text: string; process: string | null }) => void;
 }
 
 export interface LastDictation {
@@ -108,7 +119,17 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
   /// about.
   private sawLevels = false;
   private timeline = new DictationTimeline();
-  private isDictating = false;
+  private dictating = false;
+  /// A setter rather than a post at each of the call sites that flip this —
+  /// `beginDictation`, `endDictation`, `cancelDictation`, `fail` — because a
+  /// fifth call site added later would silently miss the notification if it
+  /// were the caller's job to remember it.
+  private get isDictating(): boolean { return this.dictating; }
+  private set isDictating(value: boolean) {
+    if (this.dictating === value) return;
+    this.dictating = value;
+    this.onDictatingChanged?.(value);
+  }
   /// Capturing, but not yet committed: the key is down and the gesture has not
   /// resolved. Audio recorded in this window is kept if the gesture becomes a
   /// dictation and thrown away if it does not.
@@ -123,6 +144,19 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
   private isLive = false;
   private liveGeneration = 0;
   private capturedInputDevice: string | null = null;
+  /// Which app the text landed in, captured at insertion rather than looked up
+  /// later: by the time the record is written the user may already have
+  /// switched windows.
+  private capturedDestination: string | null = null;
+  /// Set by `hotkeyTriggerIncludesMeta` right before the current gesture
+  /// starts, and read once at the end of it. Plain dictation must never fall
+  /// into voice-triggered transform routing: saying a transform's trigger
+  /// phrase as an ordinary sentence — "make that a bullet list" as words you
+  /// were dictating, not an instruction — used to run the transform instead of
+  /// typing them. Only a gesture that also held Meta reaches the router at all.
+  private transformGestureActive = false;
+  private readonly finishThenEnter: FinishThenEnter;
+  private readonly onInserted: ((info: { text: string; process: string | null }) => void) | null;
   /// Where the words are going, decided at key-down.
   ///
   /// Captured with the focus rather than read at insertion time: the app you
@@ -156,6 +190,21 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
   lastInsertion: LastDictation | null = null;
   /// Told to the UI so the dashboard can show what is happening.
   onActivity: ((activity: 'idle' | 'listening' | 'transcribing') => void) | null = null;
+  /// Fires whenever a dictation starts or ends, from any trigger — held key,
+  /// transform command, or the overlay bar's button. The bar uses it so a click
+  /// toggles rather than always starting.
+  onDictatingChanged: ((dictating: boolean) => void) | null = null;
+  /// Fires once a dictation cycle is truly over — nothing more will be typed,
+  /// whether it ended by landing, by being cancelled, or by failing to start.
+  /// Distinct from `onDictatingChanged`, which flips the instant the key comes
+  /// up, well before an insertion that is still being cleaned up and typed has
+  /// finished landing. Something that needs to know when the words are done
+  /// arriving — the quick-note bubble reading back what it caught — needs this.
+  onSettled: (() => void) | null = null;
+
+  /// Whether the dictation currently live, for anything outside this file that
+  /// needs to know.
+  get isCurrentlyDictating(): boolean { return this.isDictating; }
 
   constructor(options: CoordinatorOptions) {
     this.hotkey = options.hotkey;
@@ -172,6 +221,11 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
     this.transforms = options.transforms ?? null;
     this.context = options.context
       ?? (() => appContextOf(this.windows?.active?.process ?? null));
+    this.finishThenEnter = new FinishThenEnter(
+      () => this.settings.finishThenEnterEnabled,
+      options.sendReturn ?? (() => { postReturn(); }),
+    );
+    this.onInserted = options.onInserted ?? null;
     this.hotkey.delegate = this;
     this.transcriber.delegate = this;
   }
@@ -181,7 +235,13 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
   // MARK: - Hotkey delegate
 
   hotkeyMayBegin(): void { this.speculativelyBegin(); }
-  hotkeyAborted(): void { this.abandonSpeculation(); }
+  hotkeyAborted(): void {
+    this.finishThenEnter.tap(this.isFinalising);
+    this.abandonSpeculation();
+  }
+  hotkeyTriggerIncludesMeta(includesMeta: boolean): void {
+    this.transformGestureActive = includesMeta;
+  }
   hotkeyPressed(): void { this.beginDictation(); }
   hotkeyReleased(): void { void this.endDictation(); }
   hotkeyCancelled(userKeystroke: string): void { void this.cancelDictation(userKeystroke); }
@@ -329,6 +389,10 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
     }
     this.isDictating = true;
     this.inputLost = false;
+    // A destination belongs to one dictation. Without this a rescued sentence —
+    // one that never landed anywhere — would be stamped with the app the
+    // PREVIOUS dictation went to.
+    this.capturedDestination = null;
     this.isSpeculating = false;
     // Here and nowhere else on the way in: this is the moment a gesture stops
     // being speculative and becomes something that will write to the caret.
@@ -386,6 +450,7 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
       this.isLive = false;
       this.overlay.hide();
       this.onActivity?.('idle');
+      this.onSettled?.();
       void this.transcriber.cancel();
       return;
     }
@@ -400,7 +465,11 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
       // leaks true would silently disable live typing for the rest of the
       // session.
       this.isFinalising = false;
+      // The deferred Return is checked here too, not only on insertion — see
+      // `FinishThenEnter.fireIfPending`.
+      this.finishThenEnter.fireIfPending();
       this.onActivity?.('idle');
+      this.onSettled?.();
     }
   }
 
@@ -547,7 +616,7 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
     // Asked here, after cleanup and before insertion, because the router reads
     // a finished sentence and the transform has to happen instead of the
     // insertion rather than after it.
-    if (this.transforms) {
+    if (this.transforms && this.transformGestureActive) {
       const routing = this.transforms.router.route(final, TransformStore.shared().ordered);
       if (routing.decision.kind !== 'content') {
         // Take the command itself back off the screen first. Live typing has
@@ -599,7 +668,17 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
         // believed to be on screen, and the undo chord may not fire against a
         // sentence that never landed.
         this.undo?.record(final);
+        // Same gate as the undo record above, and for the same reason: this is
+        // the only branch where the sentence is believed to be in the app. A
+        // clipboard fallback went somewhere nothing can watch.
+        this.capturedDestination = this.windows?.active?.process ?? null;
+        this.onInserted?.({ text: final, process: this.capturedDestination });
+        // So "make that shorter" has something to act on.
         this.lastInsertion = { text: final, insertedAt: Date.now() };
+        // The text is on screen now — the moment "finish, then Enter" exists to
+        // wait for. Fires the deferred Return if a tap already asked for one;
+        // otherwise just records when.
+        this.finishThenEnter.noteInsertion();
         if (this.inputLost) {
           // Say it plainly. The text is real and it is inserted, but it is only
           // as much of the sentence as reached the app before the device
@@ -660,6 +739,7 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
     await this.transcriber.cancel();
     this.overlay.hide();
     this.onActivity?.('idle');
+    this.onSettled?.();
   }
 
   private fail(message: string): void {
@@ -689,6 +769,7 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
     this.isLive = false;
     this.overlay.show({ kind: 'error', message });
     this.onActivity?.('idle');
+    this.onSettled?.();
   }
 
   private record(
@@ -708,6 +789,7 @@ export class DictationCoordinator implements HotkeyDelegate, TranscriberDelegate
       insertedText,
       wordCount: words,
       inputDevice: this.capturedInputDevice,
+      destinationBundleID: this.capturedDestination,
       timings: {
         timeToFirstWordMs: this.timeline.timeToFirstWordMs,
         finalToInsertedMs: extra.finalToInsertedMs,

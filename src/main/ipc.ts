@@ -1,4 +1,7 @@
 import { BrowserWindow, app, ipcMain, shell } from 'electron';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { QuillSettings, type SettingsValues } from '../core/settings';
 import { HistoryStore, type DictationRecord } from '../core/stores/history';
 import { SnippetStore, type Snippet } from '../core/stores/snippets';
@@ -9,6 +12,8 @@ import {
   StyleStore, type StyleProfile, type StylePreset, styleSummaryLine,
 } from '../core/style/styleProfile';
 import { TransformStore, type Transform } from '../core/transforms/transforms';
+import { applyDictationCorrection } from '../core/style/applyCorrection';
+import { writeVoiceExport } from '../core/style/voiceExport';
 import { computeInsights, type InsightsRange } from '../core/insights/insightsMetrics';
 import { dataDirectory, dataSummary, eraseEverything } from '../core/paths';
 import { dictionaryIsLoaded, dictionarySize } from '../core/text/dictionary';
@@ -59,6 +64,16 @@ export interface Wiring {
   nimStatus: () => Promise<NIMStatus>;
   onSettingsChanged: () => void;
   relaunch: () => void;
+  quit: () => void;
+  /// The account, sync and MCP handlers from `AccountService`, keyed by their
+  /// `quill:invoke` names.
+  accountHandlers: Record<string, (payload: unknown) => Promise<unknown> | unknown>;
+  /// A key was saved or removed: the AI client and the model-backed transforms
+  /// pick it up now rather than at the next launch.
+  onKeyChanged: () => void;
+  /// True when settings.json did not exist at launch: the setup flow has not
+  /// been seen on this machine.
+  firstRun: boolean;
 }
 
 export function registerIPC(wiring: Wiring): void {
@@ -79,6 +94,8 @@ export function registerIPC(wiring: Wiring): void {
   ipcMain.handle('quill:invoke', async (_event, request: { name: string; payload?: unknown }) => {
     const { name } = request;
     const payload = request.payload as never;
+    const accountHandler = wiring.accountHandlers[name];
+    if (accountHandler) return accountHandler(request.payload);
     switch (name) {
       // MARK: Settings
       case 'settings.get':
@@ -114,6 +131,20 @@ export function registerIPC(wiring: Wiring): void {
       // MARK: History
       case 'history.list':
         return encodeRecords(wiring.history.all);
+      case 'history.correct': {
+        // The whole "Correct" flow in one call: the history keeps both versions,
+        // the style profile learns from the difference, and Dictionary
+        // candidates come back to be OFFERED — never added silently, because a
+        // wrong term pulls every future dictation towards a mistake.
+        const { id, text } = payload as { id: string; text: string };
+        return applyDictationCorrection({
+          history: wiring.history,
+          style: wiring.style,
+          existingTerms: wiring.vocabulary.terms,
+          id,
+          text,
+        });
+      }
       case 'history.insights': {
         const range = (payload as { range?: InsightsRange } | undefined)?.range ?? 'month';
         return computeInsights(wiring.history.all, {
@@ -147,7 +178,7 @@ export function registerIPC(wiring: Wiring): void {
       case 'notes.upsert':
         return encodeNote(wiring.notes.upsert(decodeNote(payload)));
       case 'notes.delete':
-        wiring.notes.delete(String(payload));
+        wiring.notes.remove(String(payload));
         return true;
 
       // MARK: Style
@@ -168,18 +199,19 @@ export function registerIPC(wiring: Wiring): void {
           );
         });
         return true;
+      case 'style.export': {
+        const written = writeVoiceExport(wiring.style.profile, wiring.history.all);
+        return written ? { path: written.url, text: written.text } : null;
+      }
       case 'style.forget':
-        wiring.style.update((profile) => {
-          profile.spelling = { votes: {}, lastObserved: null };
-          profile.contractions = { votes: {}, lastObserved: null };
-          profile.formality = { votes: {}, lastObserved: null };
-          profile.oxfordComma = { votes: {}, lastObserved: null };
-          profile.exclamations = { votes: {}, lastObserved: null };
-          profile.sentenceLength = { total: 0, count: 0 };
-          profile.phrasings = [];
-          profile.correctionCount = 0;
-          profile.lastLearned = null;
-        });
+        // Back to first run, not back to blank: the chosen preset stays.
+        wiring.style.resetLearning();
+        return true;
+      case 'style.reset':
+        // Its own delete. "Erase everything" and Uninstall leave the learned
+        // style alone on purpose — it is the thing that took months to build —
+        // so this is the one way to remove it.
+        wiring.style.reset();
         return true;
 
       // MARK: Transforms
@@ -204,6 +236,7 @@ export function registerIPC(wiring: Wiring): void {
         return keyReport();
       case 'ai.setKey':
         saveNIMKey(String(payload));
+        wiring.onKeyChanged();
         return keyReport();
       case 'ai.status':
         return wiring.nimStatus();
@@ -222,6 +255,18 @@ export function registerIPC(wiring: Wiring): void {
         setTimeout(() => wiring.relaunch(), 400);
         return removed;
       }
+      case 'app.version':
+        return app.getVersion();
+      case 'app.isFirstRun':
+        return wiring.firstRun;
+      case 'app.completeOnboarding':
+        // Finishing setup creates settings.json even when every default was
+        // accepted and nothing changed — see `QuillSettings.markConfigured`.
+        wiring.settings.markConfigured();
+        wiring.settings.noteLaunch(app.getVersion());
+        return true;
+      case 'app.uninstall':
+        return uninstall(wiring);
       case 'app.openDataDirectory':
         void shell.openPath(dataDirectory());
         return true;
@@ -314,7 +359,7 @@ function decodeSnippet(raw: unknown): Snippet {
 }
 
 function encodeNote(note: Note): unknown {
-  return { ...note, created: note.created.getTime(), modified: note.modified.getTime() };
+  return { ...note, created: note.created.getTime(), updated: note.updated.getTime() };
 }
 function encodeNotes(notes: Note[]): unknown[] { return notes.map(encodeNote); }
 
@@ -325,8 +370,7 @@ function decodeNote(raw: unknown): Note {
     title: String(value.title ?? ''),
     body: String(value.body ?? ''),
     created: value.created ? new Date(Number(value.created)) : new Date(),
-    modified: value.modified ? new Date(Number(value.modified)) : new Date(),
-    isPinned: value.isPinned === true,
+    updated: value.updated ? new Date(Number(value.updated)) : new Date(),
   };
 }
 
@@ -382,4 +426,37 @@ function encodeProfile(profile: StyleProfile): unknown {
 
 function encodeTrait(trait: StyleProfile['spelling']): unknown {
   return { votes: trait.votes, lastObserved: trait.lastObserved?.getTime() ?? null };
+}
+
+
+/// Uninstall: erase everything Quill knows, hand the application file itself to
+/// its own uninstaller, and quit.
+///
+/// The uninstaller is confirmed to exist BEFORE anything is erased — a failed
+/// uninstall must never leave someone with a wiped app that still runs, which
+/// is worse than the state they started in. Installed builds (NSIS, per-user)
+/// put `Uninstall Quill.exe` next to `Quill.exe`. A portable build or a
+/// development run has no uninstaller: nothing is touched, and the reason says
+/// what to do by hand.
+function uninstall(wiring: Wiring): { ok: boolean; reason?: string } {
+  const executableDirectory = dirname(app.getPath('exe'));
+  const uninstaller = join(executableDirectory, 'Uninstall Quill.exe');
+  if (process.platform !== 'win32' || !app.isPackaged || !existsSync(uninstaller)) {
+    return {
+      ok: false,
+      reason: 'This copy of Quill was not installed with the installer — it is a portable or '
+        + `development build, so there is no uninstaller. Nothing was erased. Delete ${executableDirectory} `
+        + 'yourself, and use "Erase everything" first if you want your data gone too.',
+    };
+  }
+  eraseEverything();
+  try {
+    // Detached, so it outlives this process. `--updated` is not passed: this is a
+    // real removal and the uninstaller should ask to confirm it.
+    spawn(uninstaller, [], { detached: true, stdio: 'ignore' }).unref();
+  } catch (error) {
+    return { ok: false, reason: `The uninstaller could not be started: ${String(error)}` };
+  }
+  setTimeout(() => wiring.quit(), 300);
+  return { ok: true };
 }

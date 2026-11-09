@@ -45,9 +45,15 @@ export function vocabularyURL(): string {
   return dataFile('vocabulary.json');
 }
 
+/// One field today, and a `terms` key that has always been there — but a strict
+/// decoder throws the moment a second field is added and an old dictionary does
+/// not have it, and the whole Dictionary would go with it. A missing `terms` is
+/// an empty list; a `terms` that is present and malformed is still damage.
+/// (The macOS build's `decodeIfPresent([String].self, forKey: .terms) ?? []`.)
 function validateVocabulary(value: unknown): Vocabulary | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const terms = (value as { terms?: unknown }).terms;
+  if (terms === undefined || terms === null) return { terms: [] };
   if (!Array.isArray(terms)) return null;
   if (!terms.every((term) => typeof term === 'string')) return null;
   return { terms: terms as string[] };

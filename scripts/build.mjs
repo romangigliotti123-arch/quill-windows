@@ -62,11 +62,22 @@ await run({
   outfile: join(root, 'dist', 'main', 'main.js'),
 });
 
+// The MCP server: a separate, dependency-free bundle that Claude launches as a
+// stdio process — `node dist/mcp/quill-mcp.js`, or Quill's own executable with
+// ELECTRON_RUN_AS_NODE=1 when it is installed. It shares no process with the app.
+await run({
+  ...shared,
+  entryPoints: [join(root, 'src', 'mcp', 'server.ts')],
+  outfile: join(root, 'dist', 'mcp', 'quill-mcp.js'),
+});
+
 await run({
   ...shared,
   entryPoints: [
     join(root, 'src', 'preload', 'dashboard.ts'),
     join(root, 'src', 'preload', 'overlay.ts'),
+    join(root, 'src', 'preload', 'bar.ts'),
+    join(root, 'src', 'preload', 'bubble.ts'),
     join(root, 'src', 'preload', 'stt.ts'),
   ],
   outdir: join(root, 'dist', 'preload'),
@@ -89,6 +100,8 @@ const browser = {
 // worth reading.
 await run({ ...browser, entryPoints: [join(root, 'src', 'renderer', 'dashboard', 'dashboard.ts')], outfile: join(root, 'dist', 'renderer', 'dashboard.js') });
 await run({ ...browser, entryPoints: [join(root, 'src', 'renderer', 'overlay', 'overlay.ts')], outfile: join(root, 'dist', 'renderer', 'overlay.js') });
+await run({ ...browser, entryPoints: [join(root, 'src', 'renderer', 'bar', 'bar.ts')], outfile: join(root, 'dist', 'renderer', 'bar.js') });
+await run({ ...browser, entryPoints: [join(root, 'src', 'renderer', 'bubble', 'bubble.ts')], outfile: join(root, 'dist', 'renderer', 'bubble.js') });
 
 // Static assets: HTML, CSS, the word list, the icons.
 for (const [from, to] of [
@@ -96,6 +109,10 @@ for (const [from, to] of [
   [join(root, 'src', 'renderer', 'dashboard', 'dashboard.css'), join(root, 'dist', 'renderer', 'dashboard.css')],
   [join(root, 'src', 'renderer', 'overlay', 'index.html'), join(root, 'dist', 'renderer', 'overlay.html')],
   [join(root, 'src', 'renderer', 'overlay', 'overlay.css'), join(root, 'dist', 'renderer', 'overlay.css')],
+  [join(root, 'src', 'renderer', 'bar', 'index.html'), join(root, 'dist', 'renderer', 'bar.html')],
+  [join(root, 'src', 'renderer', 'bar', 'bar.css'), join(root, 'dist', 'renderer', 'bar.css')],
+  [join(root, 'src', 'renderer', 'bubble', 'index.html'), join(root, 'dist', 'renderer', 'bubble.html')],
+  [join(root, 'src', 'renderer', 'bubble', 'bubble.css'), join(root, 'dist', 'renderer', 'bubble.css')],
   [join(root, 'src', 'renderer', 'stt', 'index.html'), join(root, 'dist', 'renderer', 'stt.html')],
   [join(root, 'src', 'renderer', 'stt', 'stt.js'), join(root, 'dist', 'renderer', 'stt.js')],
 ]) {

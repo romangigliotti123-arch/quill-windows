@@ -124,6 +124,11 @@ export function speechLibraryPresent(): boolean {
 export const MODEL_ORIGIN = 'https://models.quill.invalid';
 
 export function modelDirectory(): string {
+  // `QUILL_MODEL_DIR` lets a check run against a scratch data directory while
+  // still reusing the model already downloaded into the real one, instead of
+  // fetching 1.6 GB again.
+  const override = process.env.QUILL_MODEL_DIR;
+  if (override && override.length > 0) return override;
   return join(dataDirectory(), 'models');
 }
 

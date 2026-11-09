@@ -2,7 +2,7 @@ import {
   DEFAULT_TIMING, HotkeyEffect, HotkeyStateMachine, HotkeyTiming,
 } from '../../core/hotkey/stateMachine';
 import {
-  ESCAPE_CODE, HotkeyBinding, bindingNamed, isModifierCode,
+  ESCAPE_CODE, HotkeyBinding, bindingNamed, classifyTrigger, isModifierCode,
 } from '../../core/hotkey/binding';
 import { isSelfPosted, uiohook, forgetSelfPostedEvents } from '../platform/keyboard';
 import type { QuillSettings } from '../../core/settings';
@@ -22,6 +22,11 @@ export interface HotkeyDelegate {
   hotkeyAborted(): void;
   hotkeyPressed(): void;
   hotkeyReleased(): void;
+  /// Delivered ahead of `hotkeyMayBegin` on every hold-trigger press, saying
+  /// whether the gesture also held Meta — the transform gesture. The
+  /// coordinator reads it once at the end of the dictation and only then lets
+  /// the utterance reach the command router. Plain dictation never does.
+  hotkeyTriggerIncludesMeta(includesMeta: boolean): void;
   /// Escape, or any keystroke that means "throw this dictation away".
   ///
   /// `userKeystroke` is the text the cancelling key actually inserted into the
@@ -233,8 +238,12 @@ export class HotkeyEngine {
       if (isDown) {
         this.triggerDownAt = Date.now();
         this.speechHeard = false;
+        const trigger = classifyTrigger(this.down, code);
+        // Ahead of the machine's effects, so the coordinator knows this fact
+        // before `hotkeyMayBegin` even arrives.
+        this.delegate?.hotkeyTriggerIncludesMeta(trigger.includesMeta);
         this.dispatch(this.machine.handle(
-          { kind: 'triggerDown', isolated: this.isIsolated(code) }, now(),
+          { kind: 'triggerDown', isolated: trigger.isolated }, now(),
         ));
       } else {
         this.triggerDownAt = null;

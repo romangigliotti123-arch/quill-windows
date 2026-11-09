@@ -131,6 +131,39 @@ export async function renderStyle(root: HTMLElement): Promise<void> {
         profile.correctionCount === 0
           ? 'Nothing learned yet.'
           : `From ${profile.correctionCount} ${profile.correctionCount === 1 ? 'correction' : 'corrections'}.`)));
+
+    body.appendChild(h('div', { style: 'margin-top:20px' },
+      h('h2', { class: 'section-title' }, 'Take it with you'),
+      h('div', { class: 'card' },
+        h('div', { class: 'muted', style: 'margin-bottom:10px' },
+          'Your writing voice as a plain document you can hand to another AI — the style, '
+          + 'the phrasings you prefer, and a sample of how you actually write.'),
+        h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+          h('button', {
+            class: 'button secondary',
+            onClick: async () => {
+              const written = await api.style.export();
+              if (!written) { toast('Could not write the export.'); return; }
+              try {
+                await navigator.clipboard.writeText(written.text);
+                toast('Copied. A copy is saved in your Quill folder as my-voice-for-ai.md.');
+              } catch {
+                toast(`Saved to ${written.path}`);
+              }
+            },
+          }, 'Copy my voice for another AI'),
+          h('button', {
+            class: 'button danger',
+            onClick: () => confirmSheet({
+              title: 'Delete your style?',
+              body: h('p', {},
+                'This removes everything Quill has learned about how you write, and your chosen '
+                + 'voice. “Erase everything” and Uninstall leave it alone on purpose; this is the '
+                + 'one way to delete it. It cannot be undone.'),
+              confirm: 'Delete my style',
+              run: async () => { await api.style.reset(); toast('Style deleted.'); await draw(); },
+            }),
+          }, 'Delete my style…')))));
   };
 
   await draw();

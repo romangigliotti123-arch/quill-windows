@@ -3,7 +3,7 @@ import {
   card, clear, formatBytes, h, keycap, pageHead, segmented, toggleRow,
 } from '../dom';
 import { toast } from '../toast';
-import { confirmSheet } from '../sheet';
+import { confirmSheet, openSheet } from '../sheet';
 
 /// Everything a user is allowed to change.
 ///
@@ -14,9 +14,9 @@ import { confirmSheet } from '../sheet';
 
 const MODELS = [
   { value: 'onnx-community/whisper-tiny.en', label: 'Tiny — fastest, least accurate (~40 MB)' },
-  { value: 'onnx-community/whisper-base.en', label: 'Base — the default (~80 MB)' },
+  { value: 'onnx-community/whisper-base.en', label: 'Base — fast on any CPU (~80 MB)' },
   { value: 'onnx-community/whisper-small.en', label: 'Small — more accurate, slower (~250 MB)' },
-  { value: 'onnx-community/whisper-large-v3-turbo', label: 'Large turbo — best, needs a GPU (~800 MB)' },
+  { value: 'onnx-community/whisper-large-v3-turbo', label: 'Large v3 turbo — the default, best accuracy, needs a GPU (~1.6 GB)' },
 ];
 
 export async function renderSettings(root: HTMLElement): Promise<void> {
@@ -42,11 +42,13 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
     clear(body);
     body.appendChild(hotkeys(settings, bindings, draw));
     body.appendChild(dictating(settings, draw));
+    body.appendChild(overlayBar(settings, draw));
     body.appendChild(microphone(settings, devices, draw));
     body.appendChild(speechModel(settings, speech, draw));
     body.appendChild(writing(settings, draw));
     body.appendChild(aiSection(key, draw));
     body.appendChild(filesSection(settings, draw));
+    body.appendChild(await aboutSection());
 
     if (!attached) {
       attached = true;
@@ -124,6 +126,64 @@ function dictating(settings: SettingsValues, redraw: () => Promise<void>): HTMLE
         + 'it inserted — after checking it is still there.',
         settings.undoChord,
         async (next) => { await api.settings.set({ undoChord: next }); await redraw(); },
+      ),
+      toggleRow(
+        'Finish, then Enter',
+        'Let go of the dictation key, then tap it again right away: once the words have actually '
+        + 'landed — never before — Quill sends Return. A tap with nothing just dictated does nothing.',
+        settings.finishThenEnterEnabled,
+        (next) => { void api.settings.set({ finishThenEnterEnabled: next }); },
+      ),
+      toggleRow(
+        'Learn from what you change',
+        'After a dictation Quill watches the sentence it inserted — only that span, never the '
+        + 'rest of the document — and learns from what you correct. Nothing leaves this machine.',
+        settings.learnFromEdits,
+        (next) => { void api.settings.set({ learnFromEdits: next }); },
+      )));
+}
+
+const BAR_POSITIONS: { value: string; label: string }[] = [
+  { value: 'bottomCenter', label: 'Bottom center' },
+  { value: 'bottomLeft', label: 'Bottom left' },
+  { value: 'bottomRight', label: 'Bottom right' },
+  { value: 'topLeft', label: 'Top left' },
+  { value: 'topRight', label: 'Top right' },
+];
+
+/// The always-on bar: a click to start or stop instead of holding a key.
+function overlayBar(settings: SettingsValues, redraw: () => Promise<void>): HTMLElement {
+  const select = document.createElement('select');
+  select.className = 'field';
+  for (const position of BAR_POSITIONS) {
+    const item = document.createElement('option');
+    item.value = position.value;
+    item.textContent = position.label;
+    if (settings.overlayBarPosition === position.value) item.selected = true;
+    select.appendChild(item);
+  }
+  select.addEventListener('change', async () => {
+    await api.settings.set({ overlayBarPosition: select.value as SettingsValues['overlayBarPosition'] });
+    await redraw();
+  });
+  select.disabled = !settings.overlayBarEnabled;
+
+  return h('section', {},
+    h('h2', { class: 'section-title' }, 'The bar'),
+    card(
+      toggleRow(
+        'Show the bar',
+        'A small pill at the edge of the screen. Hover to widen it, click to start dictating, '
+        + 'click again to stop — for when you would rather not hold a key at all.',
+        settings.overlayBarEnabled,
+        async (next) => { await api.settings.set({ overlayBarEnabled: next }); await redraw(); },
+      ),
+      h('div', { style: 'margin:10px 0' }, select),
+      toggleRow(
+        'Show a New Note button',
+        'A second segment that starts a note straight into a fresh dictation.',
+        settings.overlayShowsNewNoteButton,
+        (next) => { void api.settings.set({ overlayShowsNewNoteButton: next }); },
       )));
 }
 
@@ -196,10 +256,13 @@ function speechModel(
     card(
       h('div', { style: 'display:flex;gap:10px;align-items:center;margin-bottom:10px' },
         status,
-        speech.fellBackToCPU
+        speech.fellBackToSmallerModel
           ? h('span', { class: 'muted tiny' },
-            'You asked for the GPU and this machine could not provide it, so it is running on the CPU.')
-          : null),
+            'Large v3 turbo needs a GPU and none is available, so Quill loaded Base instead.')
+          : speech.fellBackToCPU
+            ? h('span', { class: 'muted tiny' },
+              'You asked for the GPU and this machine could not provide it, so it is running on the CPU.')
+            : null),
       select,
       h('div', { style: 'margin-top:12px' },
         toggleRow(
@@ -383,4 +446,52 @@ function retentionDetail(value: SettingsValues['historyRetention']): string {
     case 'month': return 'Anything dictated more than a month ago is deleted.';
     case 'forever': return 'Nothing is ever deleted. Insights keeps every number.';
   }
+}
+
+/// One row, deliberately its own group and the last one on the screen.
+///
+/// "Erase everything" above empties Quill and leaves it installed, which is the
+/// right shape for someone who wants a clean slate. This is the other question —
+/// someone who is done with the app entirely — and it does not belong under
+/// "Your data" pretending to be one more file operation.
+async function aboutSection(): Promise<HTMLElement> {
+  const version = await api.app.version().catch(() => 'dev');
+  return h('section', {},
+    h('h2', { class: 'section-title' }, 'About'),
+    card(
+      h('div', { style: 'display:flex;gap:12px;align-items:center' },
+        h('div', { class: 'grow' },
+          h('div', { style: 'font-weight:600' }, 'Uninstall Quill'),
+          h('div', { class: 'metric-note' },
+            `Erases everything Quill knows, then runs its uninstaller and quits. Version ${version}.`)),
+        h('button', {
+          class: 'button danger',
+          onClick: () => {
+            confirmSheet({
+              title: 'Uninstall Quill?',
+              body: h('div', {},
+                h('p', {},
+                  'This erases every dictation, your Dictionary, transforms, notes, settings and API '
+                  + 'key, then starts the Quill uninstaller and quits.'),
+                h('p', { class: 'muted' },
+                  'This cannot be undone from inside Quill. If this copy was not installed with the '
+                  + 'installer, nothing is erased and you are told what to remove by hand.')),
+              confirm: 'Uninstall and quit',
+              run: async () => {
+                const outcome = await api.app.uninstall();
+                if (!outcome.ok) {
+                  // After the confirmation sheet has finished closing, or its own
+                  // close would take this one with it.
+                  window.setTimeout(() => openSheet({
+                    title: 'Quill was not uninstalled',
+                    body: h('p', {}, outcome.reason ?? 'Could not uninstall.'),
+                    confirm: 'OK',
+                    cancel: 'Close',
+                    run: () => true,
+                  }), 0);
+                }
+              },
+            });
+          },
+        }, 'Uninstall…'))));
 }

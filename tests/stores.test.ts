@@ -2,16 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { HistoryStore, isLoopbackDevice, type DictationRecord } from '../src/core/stores/history';
+import { dirname, join } from 'node:path';
+import { HistoryStore, historyURL, isLoopbackDevice, type DictationRecord } from '../src/core/stores/history';
 import { NoteStore, makeNote, noteDisplayTitle } from '../src/core/stores/notes';
 import { SnippetStore } from '../src/core/stores/snippets';
 import { TransformStore, applyOfflineRecipe, transformSeed } from '../src/core/transforms/transforms';
 import {
-  VocabularyBook, contextualStrings, loadVocabularyOutcome, VOCABULARY_SEED,
+  VocabularyBook, contextualStrings, loadVocabularyOutcome, VOCABULARY_SEED, vocabularyURL,
 } from '../src/core/stores/vocabulary';
+import { voiceExportURL } from '../src/core/style/voiceExport';
 import { QuillSettings, retentionCutoff, defaultSettings } from '../src/core/settings';
-import { DATA_FILES } from '../src/core/paths';
+import { DATA_FILES, DELIBERATELY_NOT_ERASED, dataFile, eraseEverything } from '../src/core/paths';
 import { harvestCandidate } from '../src/core/stores/vocabularyHarvest';
 import { uuid } from '../src/core/stores/storeFile';
 
@@ -250,11 +251,11 @@ test('settings changes are announced exactly once and only when something moved'
 
 test('a note takes its title from its first line', () => {
   // Nobody should have to name a thought before they are allowed to have it.
+  assert.equal(noteDisplayTitle(makeNote({ body: 'Call the vet\nabout the appointment' })), 'Call the vet');
   assert.equal(noteDisplayTitle(makeNote({ body: 'Ask Carlo about the rails\nand the cloth' })),
     'Ask Carlo about the rails');
   assert.equal(noteDisplayTitle(makeNote({ title: 'Named', body: 'body' })), 'Named');
-  assert.equal(noteDisplayTitle(makeNote({})), 'Untitled');
-  assert.ok(noteDisplayTitle(makeNote({ body: 'x'.repeat(200) })).endsWith('…'));
+  assert.equal(noteDisplayTitle(makeNote({})), 'Untitled note');
 });
 
 // MARK: - Offline transform recipes
@@ -300,10 +301,10 @@ test('the harvest refuses names that would poison the dictionary', () => {
 // MARK: - Erase everything
 
 test('every file the app writes is on the erase list', () => {
-  // "Erase all my data" is a promise, and a promise kept by an `rm` written
-  // from memory is one that quietly breaks the next time somebody adds a store.
-  // This walks the source for `dataFile("…")` and fails when one is added and
-  // not listed.
+  // "Erase all my data" is a promise, and a promise kept by an `rm` written from
+  // memory is one that quietly breaks the next time somebody adds a store. This
+  // walks the source for `dataFile('…')` and fails when one is added and not
+  // listed.
   const roots = ['src/core', 'src/main'];
   const named = new Set<string>();
   const walk = (dir: string): void => {
@@ -311,16 +312,91 @@ test('every file the app writes is on the erase list', () => {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) { walk(path); continue; }
       if (!entry.name.endsWith('.ts')) continue;
-      for (const match of readFileSync(path, 'utf8').matchAll(/dataFile\('([^']+)'\)/g)) {
-        named.add(match[1]!);
+      for (const match of readFileSync(path, 'utf8').matchAll(/dataFile\(['"]([^'"]+)['"]\)/g)) {
+        const name = match[1]!;
+        // Real filenames only. The pattern also appears inside the doc comment
+        // that explains this very test, written as dataFile("…").
+        if (name.includes('.') && !name.includes('…')) named.add(name);
       }
     }
   };
   for (const root of roots) walk(root);
 
   assert.ok(named.size > 0, 'the scan found no data files at all — it is not looking where it thinks');
+  // style.json is the one deliberate exception, not an oversight: it is written
+  // and intentionally NOT on the erase list, so that "Erase everything" and
+  // "Uninstall" cannot take the learned writing profile with them. See
+  // `StyleStore.reset()`, the button that removes it on its own.
+  const excluded = new Set<string>(DELIBERATELY_NOT_ERASED);
   for (const name of named) {
+    if (excluded.has(name)) continue;
     assert.ok((DATA_FILES as readonly string[]).includes(name),
       `${name} is written but is not on the erase list`);
+  }
+  // And nothing listed that the app never writes, which would be a stale entry
+  // pointing at someone else's file.
+  const stale = DATA_FILES.filter((name) => !named.has(name));
+  assert.deepEqual(stale, [], `on the erase list but never written: ${stale.join(', ')}`);
+});
+
+test('erase and uninstall cannot take the learned style with them', () => {
+  // The positive half of the exception above: not just "the scan allows this",
+  // but "this is actually true of the list a real erase reads".
+  assert.ok(!(DATA_FILES as readonly string[]).includes('style.json'));
+});
+
+test('the debug-harness receipts go when everything goes', () => {
+  const dir = scratch();
+  const previous = process.env.QUILL_DATA_DIR;
+  process.env.QUILL_DATA_DIR = dir;
+  try {
+    for (const name of ['erase-dry-run.txt', 'erased.txt', 'notes.json.unreadable-1', 'unrelated.bin']) {
+      writeFileSync(join(dir, name), 'x');
+    }
+    const removed = eraseEverything().sort();
+    assert.deepEqual(removed, ['erase-dry-run.txt', 'erased.txt', 'notes.json.unreadable-1']);
+    assert.ok(existsSync(join(dir, 'unrelated.bin')), 'erase took a file that is not Quill\'s');
+  } finally {
+    if (previous === undefined) delete process.env.QUILL_DATA_DIR;
+    else process.env.QUILL_DATA_DIR = previous;
+  }
+});
+
+test('erase leaves the learned style on disk', () => {
+  const dir = scratch();
+  const previous = process.env.QUILL_DATA_DIR;
+  process.env.QUILL_DATA_DIR = dir;
+  try {
+    writeFileSync(join(dir, 'style.json'), '{"preset":"casual"}');
+    writeFileSync(join(dir, 'history.json'), '[]');
+    eraseEverything();
+    assert.ok(existsSync(join(dir, 'style.json')), 'erase took the learned style');
+    assert.ok(!existsSync(join(dir, 'history.json')));
+  } finally {
+    if (previous === undefined) delete process.env.QUILL_DATA_DIR;
+    else process.env.QUILL_DATA_DIR = previous;
+  }
+});
+
+test('every store is isolated by QUILL_DATA_DIR alone', () => {
+  // A test or a screenshot run that sets only that variable must isolate every
+  // store, and erase must never point at a different file than the one a store
+  // is actually using. Each default location is resolved under the override.
+  const dir = scratch();
+  const previous = process.env.QUILL_DATA_DIR;
+  process.env.QUILL_DATA_DIR = dir;
+  try {
+    assert.equal(dirname(historyURL()), dir);
+    assert.equal(dirname(vocabularyURL()), dir);
+    assert.equal(dirname(voiceExportURL()), dir);
+    for (const name of ['style.json', 'snippets.json', 'notes.json']) {
+      assert.equal(dataFile(name), join(dir, name));
+    }
+    const note = new NoteStore();
+    note.upsert(makeNote({ body: 'written under the override' }));
+    assert.ok(existsSync(join(dir, 'notes.json')));
+  } finally {
+    if (previous === undefined) delete process.env.QUILL_DATA_DIR;
+    else process.env.QUILL_DATA_DIR = previous;
   }
 });

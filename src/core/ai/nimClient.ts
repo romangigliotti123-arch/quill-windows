@@ -291,7 +291,7 @@ export interface AICompleting {
 
 export class NIMClient implements AICompleting {
   readonly config: AIConfig;
-  private readonly key: string | null;
+  private key: string | null;
   private readonly vocabulary: string[];
 
   private consecutiveFailures = 0;
@@ -306,6 +306,20 @@ export class NIMClient implements AICompleting {
     this.config = options.config ?? defaultAIConfig(options.systemPrompt ?? '');
     this.key = options.key === undefined ? loadNIMKey() : options.key;
     this.vocabulary = options.vocabulary ?? [];
+  }
+
+  /// Re-reads the key from the environment and the key file.
+  ///
+  /// The key used to be read once, in the constructor — so a key pasted into
+  /// Settings, or one that arrived through sync, did nothing until the app was
+  /// restarted, with the screen saying it was saved. Called from the places that
+  /// change it.
+  refreshKey(): void {
+    this.key = loadNIMKey();
+    // A new key is a fresh start: a breaker opened by the old key's failures
+    // must not keep the new one off for the rest of its cooldown.
+    this.consecutiveFailures = 0;
+    this.openedAt = null;
   }
 
   get isConfigured(): boolean { return this.key !== null; }

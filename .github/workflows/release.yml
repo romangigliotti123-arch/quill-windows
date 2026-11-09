@@ -1,0 +1,44 @@
+name: Release
+
+# Builds the Windows installer and the portable exe, and attaches them to a
+# GitHub release. Triggered by pushing a tag (`vX.Y.Z`), or by hand from the
+# Actions tab to rebuild without cutting a new version.
+#
+# Unsigned, on purpose. Windows SmartScreen will warn on first run, and that
+# warning is honest: there is no code-signing certificate. Buying one is a
+# decision with a yearly bill attached, so it is left to whoever ships this.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quill-windows
+          path: |
+            release/*.exe
+            !release/*unpacked*
+          if-no-files-found: error
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.exe

@@ -1,9 +1,11 @@
+import { unlinkSync } from 'node:fs';
 import { dataFile, writeAtomic } from '../paths';
 import { encodeJSON, fromISO, readStoreFile, toISO } from '../stores/storeFile';
 import { escapeRegExp, escapeReplacement } from '../text/strings';
 import { AIOutputGuard } from '../ai/outputGuard';
 import { CLEANUP_SYSTEM_PROMPT } from '../ai/prompts';
 import { SpellingConvention, toBritish } from './orthography';
+import { learnStyle } from './styleLearner';
 
 // The learned writing profile: what has been observed about how this person
 // writes, what it is confident enough to act on, and what it is allowed to do
@@ -236,6 +238,42 @@ export function addSample(mean: RunningMean, sample: number): void {
   mean.count += 1;
 }
 
+/// Combines the evidence from two machines into one trait, for `SyncEngine`.
+///
+/// Votes add, per value, capped at the same ceiling a single machine's own
+/// corrections already respect — six votes of agreement is six votes of
+/// agreement, whichever machine they were said on. The later `lastObserved`
+/// wins, since it is the more recent fact about how this person writes now.
+///
+/// Lives here rather than in the sync engine because `votes` is meant to read
+/// as an explanation of a real belief, not a value any caller can set to
+/// anything — see the type's own doc comment.
+export function mergeTraits(ours: StyleTrait, theirs: StyleTrait): StyleTrait {
+  const result: StyleTrait = { votes: { ...ours.votes }, lastObserved: ours.lastObserved };
+  for (const [key, otherCount] of Object.entries(theirs.votes)) {
+    result.votes[key] = Math.min(VOTE_CEILING, (result.votes[key] ?? 0) + otherCount);
+  }
+  result.lastObserved = latestOf(ours.lastObserved, theirs.lastObserved);
+  return result;
+}
+
+/// Combines two machines' means into one, for `SyncEngine`.
+///
+/// `SAMPLE_CEILING` bounds how far `addSample` lets ONE machine's own window
+/// slide, so a habit from a year ago cannot outvote last week. It does not
+/// apply here: both sides are already within it, so their sum is at most double
+/// it, which is still an honest weighted average of real evidence — capping it
+/// here would scale `count` without scaling `total` to match, which is the
+/// average silently going wrong rather than merely being generous with history.
+export function mergeMeans(ours: RunningMean, theirs: RunningMean): RunningMean {
+  return { total: ours.total + theirs.total, count: ours.count + theirs.count };
+}
+
+function latestOf(a: Date | null, b: Date | null): Date | null {
+  if (a && b) return a.getTime() >= b.getTime() ? a : b;
+  return a ?? b;
+}
+
 // MARK: - Phrasing
 
 /// A rewrite the user has made more than once.
@@ -330,6 +368,66 @@ export function freshProfile(preset: StylePreset = 'neutral'): StyleProfile {
     modelReverted: 0,
     lastLearned: null,
   };
+}
+
+// MARK: - Combining two machines' evidence, for SyncEngine
+
+/// Everything either machine has observed, in one profile. Never fewer votes,
+/// never fewer phrasings, never a smaller correction count than either side
+/// already held on its own — the rule Roman asked for explicitly: signing into
+/// the same account on a second machine must never look like losing what that
+/// machine already knew.
+///
+/// `preset`, `appTones` and `isLearningEnabled` are choices, not evidence —
+/// there is nothing to sum. Whichever side has the more recent `lastLearned`
+/// wins them, on the theory that the machine someone has been actively
+/// dictating on lately is the one whose settings they meant last.
+///
+/// Returns a new profile; neither argument is modified.
+export function mergeProfiles(ours: StyleProfile, theirs: StyleProfile): StyleProfile {
+  const result = structuredClone(ours);
+  const otherIsNewer = (theirs.lastLearned?.getTime() ?? -Infinity)
+    > (ours.lastLearned?.getTime() ?? -Infinity);
+  if (otherIsNewer) {
+    result.preset = theirs.preset;
+    result.appTones = { ...theirs.appTones };
+    result.isLearningEnabled = theirs.isLearningEnabled;
+  }
+  result.lastLearned = latestOf(ours.lastLearned, theirs.lastLearned);
+
+  result.spelling = mergeTraits(ours.spelling, theirs.spelling);
+  result.contractions = mergeTraits(ours.contractions, theirs.contractions);
+  result.formality = mergeTraits(ours.formality, theirs.formality);
+  result.oxfordComma = mergeTraits(ours.oxfordComma, theirs.oxfordComma);
+  result.exclamations = mergeTraits(ours.exclamations, theirs.exclamations);
+  result.sentenceLength = mergeMeans(ours.sentenceLength, theirs.sentenceLength);
+
+  const byID = new Map<string, StylePhrasing>();
+  for (const phrasing of ours.phrasings) byID.set(phrasingID(phrasing), { ...phrasing });
+  for (const other of theirs.phrasings) {
+    const id = phrasingID(other);
+    const existing = byID.get(id);
+    if (existing) {
+      existing.count += other.count;
+      existing.lastObserved = latestOf(existing.lastObserved, other.lastObserved);
+    } else {
+      byID.set(id, { ...other });
+    }
+  }
+  // Highest-evidence first, then most recent — the same ordering
+  // `MAXIMUM_PHRASINGS` exists to protect: what survives a trim should be what
+  // has actually been said more than once, not whatever happened to be listed
+  // first.
+  result.phrasings = [...byID.values()]
+    .sort((a, b) => (a.count === b.count
+      ? (b.lastObserved?.getTime() ?? -Infinity) - (a.lastObserved?.getTime() ?? -Infinity) || 0
+      : b.count - a.count))
+    .slice(0, MAXIMUM_PHRASINGS);
+
+  result.correctionCount = ours.correctionCount + theirs.correctionCount;
+  result.modelAccepted = ours.modelAccepted + theirs.modelAccepted;
+  result.modelReverted = ours.modelReverted + theirs.modelReverted;
+  return result;
 }
 
 export function settled(profile: StyleProfile, trait: StyleTrait): string | null {
@@ -672,6 +770,13 @@ export class StyleStore {
     }
   }
 
+  /// See `HistoryStore.reloadFromDisk`.
+  reloadFromDisk(): void {
+    if (!this.url) return;
+    const outcome = readStoreFile(this.url, decodeProfile);
+    if (outcome.kind === 'decoded') this.current = outcome.value;
+  }
+
   get profile(): StyleProfile {
     return structuredClone(this.current);
   }
@@ -679,6 +784,73 @@ export class StyleStore {
   update(transform: (profile: StyleProfile) => void): void {
     transform(this.current);
     this.persist();
+  }
+
+  /// The dashboard's entry point: he edited a dictation and saved it. Also what
+  /// `EditWatcher` calls once an edit has held still.
+  ///
+  /// `dictated` is what Quill inserted, not the raw recogniser output — the
+  /// diff that matters is between Quill's answer and his answer.
+  recordCorrection(dictated: string, edited: string, at: Date = new Date()): StyleProfile {
+    if (!this.current.isLearningEnabled) return this.profile;
+    this.current = learnStyle(dictated, edited, this.current, at);
+    this.persist();
+    return this.profile;
+  }
+
+  recordModelOutcome(accepted: boolean): void {
+    this.update((profile) => recordModelOutcome(profile, accepted));
+  }
+
+  /// The Style screen's own "Delete my style" — independent of, and not
+  /// reachable from, "Erase everything" or "Uninstall". See the comment on
+  /// `DATA_FILES` for why style.json is deliberately excluded from both: this is
+  /// the one place it can be removed, and it asks about nothing else when it
+  /// does.
+  ///
+  /// Wins over a damaged file too: `loadFailed` blocks every other write in this
+  /// class, on purpose, so a broken file is never overwritten by accident —
+  /// but there is no "keep the damaged copy around" version of a button whose
+  /// entire job is removal, and it must clear the flag or every write from here
+  /// on would silently no-op forever.
+  reset(): void {
+    this.current = freshProfile();
+    this.loadFailed = false;
+    if (!this.url) return;
+    try {
+      unlinkSync(this.url);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  setPreset(preset: StylePreset): void {
+    this.update((profile) => { profile.preset = preset; });
+  }
+
+  /// null clears the override and returns the app to the suggested-or-base tone.
+  setTone(preset: StylePreset | null, processOrClass: string): void {
+    this.update((profile) => {
+      if (preset === null) delete profile.appTones[processOrClass];
+      else profile.appTones[processOrClass] = preset;
+    });
+  }
+
+  /// For the dashboard's "forget what you've learned" — the escape hatch a
+  /// learning feature has to have, or a single bad week is permanent.
+  ///
+  /// Back to first run, not back to blank. Chosen settings are kept — the user
+  /// did not ask to undo their own preset.
+  resetLearning(): void {
+    this.update((profile) => {
+      const fresh = freshProfile();
+      fresh.preset = profile.preset;
+      fresh.appTones = profile.appTones;
+      fresh.isLearningEnabled = profile.isLearningEnabled;
+      fresh.modelAccepted = profile.modelAccepted;
+      fresh.modelReverted = profile.modelReverted;
+      Object.assign(profile, fresh);
+    });
   }
 
   private persist(): void {
