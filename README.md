@@ -58,7 +58,7 @@ npm start        # builds, then launches Quill
 npm run dist:win
 ```
 
-**Expected:** `release\` contains an NSIS installer (`Quill Setup 1.3.2.exe`) and a portable executable (`Quill-1.3.2-portable.exe`). Both are **unsigned**, so Windows SmartScreen shows "Windows protected your PC" on first run — click **More info ▸ Run anyway**. That warning is honest: there is no code-signing certificate, and buying one is a yearly cost left to whoever ships this.
+**Expected:** `release\` contains an NSIS installer (`Quill Setup 1.3.2.exe`, about 224 MB, x64 and arm64 in one) and a portable executable (`Quill-1.3.2-portable.exe`, about 116 MB, x64). CI builds exactly these on every push; download them from the latest run's **Artifacts** on the Actions tab if you do not want to build. Both are **unsigned**, so Windows SmartScreen shows "Windows protected your PC" on first run — click **More info ▸ Run anyway**. That warning is honest: there is no code-signing certificate, and buying one is a yearly cost left to whoever ships this.
 
 The installer is per-user (no admin prompt) and installs to `%LOCALAPPDATA%\Programs\Quill`.
 
@@ -287,7 +287,7 @@ firebase/        Firestore rules and config, byte-identical to the macOS repo
 
 Be honest with whoever you hand this to:
 
-- **Verified:** the full test suite (547) and type-check; the bundle builds; the MCP server answers `initialize` / `tools/list`; the bar's layout and states were checked in a browser harness; CI builds the unsigned installer and portable exe on `windows-latest`.
+- **Verified:** on a real `windows-latest` GitHub runner, every push: `npm ci`, type-check, all 547 tests, the bundle, and the unsigned installer + portable exe (the first run of that caught a CRLF bug in the homophone-table parser that only Windows checkouts trigger — fixed, with a regression test). Also checked during development: the MCP server answers `initialize` / `tools/list`, and the bar, first-run setup, Notes and Settings screens render correctly in a browser harness.
 - **Not verified on real Windows hardware by the person who made this port** (it was developed on a Mac): hold-to-talk through the real keyboard hook, WebGPU transcription with large-v3-turbo, the UI Automation reader behind "learn from what you change", the active-window tracker, and the NSIS uninstall path. Step 4 above (`npm run check:speech`) and a manual dictation are the acceptance test for the first two; if any of them fails, the error text is what to report.
 - The `fp16`-encoder / `q4`-decoder weights for large-v3-turbo are the combination the transformers.js library uses for this exact model on WebGPU; they were not benchmarked here. `QUILL_DTYPE` overrides them.
 
